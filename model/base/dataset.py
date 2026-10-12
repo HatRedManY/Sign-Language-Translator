@@ -18,12 +18,13 @@ class SlovoDataset(Dataset):
         label_to_idx — словарь {текст: индекс}
         num_frames  — сколько кадров сэмплировать (по умолчанию 16)
         img_size    — размер стороны кадра (по умолчанию 112)
-        training    — режим обучения (включает случайное смещение начала)
+        training    — режим обучения (включает аугментацию)
     """
     
     # Статистики Kinetics-400 (на которых обучался R3D-18)
-    MEAN = torch.tensor([0.43216, 0.394666, 0.37645]).view(3, 1, 1, 1)
-    STD = torch.tensor([0.22803, 0.22145, 0.216989]).view(3, 1, 1, 1)
+    # Создаём как обычные тензоры, переносим на GPU в train.py
+    MEAN = None
+    STD = None
     
     def __init__(self, df, root_dir, label_to_idx, num_frames=16,
                  img_size=112, training=False):
@@ -33,6 +34,15 @@ class SlovoDataset(Dataset):
         self.num_frames = num_frames
         self.img_size = img_size
         self.training = training
+        
+        # Инициализируем MEAN/STD один раз
+        if SlovoDataset.MEAN is None:
+            SlovoDataset.MEAN = torch.tensor(
+                [0.43216, 0.394666, 0.37645]
+            ).view(3, 1, 1, 1)
+            SlovoDataset.STD = torch.tensor(
+                [0.22803, 0.22145, 0.216989]
+            ).view(3, 1, 1, 1)
     
     def __len__(self):
         return len(self.df)
@@ -87,17 +97,12 @@ class SlovoDataset(Dataset):
             cap.release()
             return np.zeros((self.num_frames, size, size, 3), dtype=np.uint8)
         
-        # Определяем, какие кадры нам нужны
-        if self.training and total > self.num_frames:
-            # Случайное смещение начала (аугментация)
-            max_start = total - self.num_frames
-            start = np.random.randint(0, max_start + 1)
-            indices = set(range(start, start + self.num_frames))
-        else:
-            # Равномерная выборка (для теста и коротких видео)
-            indices = set(
-                np.linspace(0, total - 1, self.num_frames, dtype=int).tolist()
-            )
+        # ВСЕГДА используем равномерную выборку по всему видео.
+        # В Slovo видео уже обрезаны по границам жеста, поэтому
+        # случайный отрезок потеряет начало или конец жеста.
+        indices = set(
+            np.linspace(0, total - 1, self.num_frames, dtype=int).tolist()
+        )
         
         # Читаем только нужные кадры
         frames = []
@@ -122,4 +127,36 @@ class SlovoDataset(Dataset):
             else:
                 frames.append(np.zeros((size, size, 3), dtype=np.uint8))
         
-        return np.array(frames[:self.num_frames])
+        frames = np.array(frames[:self.num_frames])
+        
+        # Аугментация (только для training)
+        if self.training:
+            frames = self._augment(frames)
+        
+        return frames
+    
+    def _augment(self, frames):
+        """
+        Простая аугментация: случайный сдвиг и изменение яркости.
+        
+        Применяется ко всему видео одинаково, чтобы не нарушить
+        временную структуру жеста.
+        """
+        h, w = frames.shape[1], frames.shape[2]
+        
+        # Случайный сдвиг на ±10% (одинаковый для всех кадров)
+        if np.random.random() < 0.5:
+            shift_x = np.random.randint(-w // 10, w // 10)
+            shift_y = np.random.randint(-h // 10, h // 10)
+            M = np.float32([[1, 0, shift_x], [0, 1, shift_y]])
+            frames = np.array([
+                cv2.warpAffine(f, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+                for f in frames
+            ])
+        
+        # Случайное изменение яркости (±20%)
+        if np.random.random() < 0.5:
+            factor = np.random.uniform(0.8, 1.2)
+            frames = np.clip(frames.astype(np.float32) * factor, 0, 255).astype(np.uint8)
+        
+        return frames
