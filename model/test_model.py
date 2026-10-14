@@ -135,3 +135,4 @@ for i in range(min(100, len(df_test))):
 
 if total > 0:
     print(f"Точность на {total} примерах: {correct}/{total} = {100*correct/total:.1f}%")
+    
