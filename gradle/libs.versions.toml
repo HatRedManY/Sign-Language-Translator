@@ -1,6 +1,6 @@
 [versions]
 agp = "9.4.1"
-cameraxVersion = "1.3.1"
+cameraxVersion = "1.6.2"
 coreKtx = "1.19.1"
 executorchAndroid = "1.5.1"
 junit = "4.13.2"
@@ -8,8 +8,8 @@ junitVersion = "1.3.0"
 espressoCore = "3.7.0"
 lifecycleRuntimeKtx = "2.11.0"
 activityCompose = "1.13.0"
-kotlin = "2.2.10"
-composeBom = "2026.02.01"
+kotlin = "2.4.21"
+composeBom = "2026.09.00"
 soloader = "0.12.1"
 
 [libraries]
