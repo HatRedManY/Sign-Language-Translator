@@ -1,0 +1,33 @@
+RUNS_DIR = E:\Programs\project\runs_r3d
+Classes = 100
+Device = cuda
+
+Epoch 1/20 | Loss: 4.6025 | Train Acc: 3.87% | Test Acc: 18.40% | LR: 1.00e-04
+  -> new best: 18.40%
+Epoch 2/20 | Loss: 3.6100 | Train Acc: 18.53% | Test Acc: 37.80% | LR: 1.00e-04
+  -> new best: 37.80%
+Epoch 3/20 | Loss: 2.7248 | Train Acc: 42.20% | Test Acc: 53.80% | LR: 1.00e-04
+  -> new best: 53.80%
+Epoch 4/20 | Loss: 1.9003 | Train Acc: 67.47% | Test Acc: 65.80% | LR: 1.00e-04
+  -> new best: 65.80%
+Epoch 5/20 | Loss: 1.2600 | Train Acc: 82.67% | Test Acc: 62.20% | LR: 1.00e-04
+Epoch 6/20 | Loss: 0.8066 | Train Acc: 90.27% | Test Acc: 62.80% | LR: 1.00e-04
+Epoch 7/20 | Loss: 0.5833 | Train Acc: 93.33% | Test Acc: 67.60% | LR: 1.00e-04
+  -> new best: 67.60%
+Epoch 8/20 | Loss: 0.3959 | Train Acc: 95.60% | Test Acc: 70.00% | LR: 1.00e-04
+  -> new best: 70.00%
+Epoch 9/20 | Loss: 0.2921 | Train Acc: 96.93% | Test Acc: 60.00% | LR: 1.00e-04
+Epoch 10/20 | Loss: 0.2074 | Train Acc: 98.13% | Test Acc: 63.00% | LR: 1.00e-04
+Epoch 11/20 | Loss: 0.2074 | Train Acc: 98.00% | Test Acc: 69.80% | LR: 1.00e-04
+Epoch 12/20 | Loss: 0.1627 | Train Acc: 98.20% | Test Acc: 63.40% | LR: 5.00e-05
+Epoch 13/20 | Loss: 0.1157 | Train Acc: 98.87% | Test Acc: 73.20% | LR: 5.00e-05
+  -> new best: 73.20%
+Epoch 14/20 | Loss: 0.0890 | Train Acc: 99.60% | Test Acc: 74.60% | LR: 5.00e-05
+  -> new best: 74.60%
+Epoch 15/20 | Loss: 0.0728 | Train Acc: 99.40% | Test Acc: 71.40% | LR: 5.00e-05
+Epoch 16/20 | Loss: 0.0619 | Train Acc: 99.33% | Test Acc: 74.40% | LR: 5.00e-05
+Epoch 17/20 | Loss: 0.0631 | Train Acc: 99.60% | Test Acc: 71.40% | LR: 5.00e-05
+Epoch 18/20 | Loss: 0.0582 | Train Acc: 99.60% | Test Acc: 62.80% | LR: 2.50e-05
+Epoch 19/20 | Loss: 0.0596 | Train Acc: 99.53% | Test Acc: 72.60% | LR: 2.50e-05
+
+Early stopping on epoch 19
