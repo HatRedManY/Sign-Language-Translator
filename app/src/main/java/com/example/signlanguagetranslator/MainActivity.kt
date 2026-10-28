@@ -23,22 +23,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import org.pytorch.executorch.EValue
-import org.pytorch.executorch.Module
-import org.pytorch.executorch.Tensor
+import org.pytorch.IValue
+import org.pytorch.Module
+import org.pytorch.PyTorchAndroid
+import org.pytorch.Tensor
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import androidx.core.graphics.scale
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import org.pytorch.PyTorchCodegenLoader
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        PyTorchCodegenLoader.loadNativeLibs()
         setContent { App() }
     }
 }
@@ -78,8 +80,8 @@ fun CameraScreen() {
     val lifecycleOwner = LocalLifecycleOwner.current
     var recognizedText by remember { mutableStateOf("Ожидание жеста…") }
 
-    // ExecuTorch-модуль загружается один раз
-    val module = remember { loadExecuTorchModule(context) }
+    // Модель загружается один раз
+    val module = remember { loadModel(context) }
     val analyzer = remember { SignAnalyzer(module) { result -> recognizedText = result } }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -97,7 +99,7 @@ fun CameraScreen() {
                     val cameraProvider = cameraProviderFuture.get()
 
                     val preview = Preview.Builder().build().also {
-                        it.surfaceProvider = previewView.surfaceProvider
+                        it.setSurfaceProvider(previewView.surfaceProvider)
                     }
 
                     val imageAnalysis = ImageAnalysis.Builder()
@@ -121,7 +123,6 @@ fun CameraScreen() {
             }
         )
 
-        // Оверлей с результатом
         Card(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -139,11 +140,12 @@ fun CameraScreen() {
     }
 }
 
-// ================= ExecuTorch =================
-private fun loadExecuTorchModule(context: Context): Module {
-    val modelFile = File(context.filesDir, "mvitv2_slovo_100_portable.pte")
+// ================= PyTorch Mobile =================
+
+private fun loadModel(context: Context): Module {
+    val modelFile = File(context.filesDir, "r3d18_slovo_100.pt")
     if (!modelFile.exists()) {
-        context.assets.open("mvitv2_slovo_100_portable.pte").use { input ->
+        context.assets.open("r3d18_slovo_100.pt").use { input ->
             FileOutputStream(modelFile).use { output -> input.copyTo(output) }
         }
     }
@@ -151,6 +153,7 @@ private fun loadExecuTorchModule(context: Context): Module {
 }
 
 // ================= Анализатор кадров =================
+
 class SignAnalyzer(
     private val module: Module,
     private val onResult: (String) -> Unit
@@ -179,20 +182,30 @@ class SignAnalyzer(
         frameBuffer.clear()
 
         executor.execute {
-            val inputTensor = preprocess(frames)
-            val output = module.forward(EValue.from(inputTensor))[0].toTensor()
-            val scores = output.dataAsFloatArray
-            val maxIdx = scores.indices.maxByOrNull { scores[it] } ?: -1
+            try {
+                val inputTensor = preprocess(frames)
+                val output = module.forward(IValue.from(inputTensor)).toTensor()
+                val scores = output.dataAsFloatArray
+                val maxIdx = scores.indices.maxByOrNull { scores[it] } ?: -1
+                val confidence = if (maxIdx >= 0) scores[maxIdx] else 0f
 
-            // Если у вас есть список классов, подставьте его здесь
-            val label = if (maxIdx >= 0) "Класс #$maxIdx" else "Не распознано"
-            onResult(label)
-            isProcessing = false
+                val label = if (maxIdx >= 0) {
+                    "Класс #$maxIdx (уверенность: ${"%.2f".format(confidence)})"
+                } else {
+                    "Не распознано"
+                }
+                onResult(label)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                onResult("Ошибка инференса: ${e.message}")
+            } finally {
+                isProcessing = false
+            }
         }
     }
 
     private fun preprocess(frames: List<Bitmap>): Tensor {
-        val size = 224
+        val size = 112
         val mean = floatArrayOf(0.43216f, 0.394666f, 0.37645f)
         val std = floatArrayOf(0.22803f, 0.22145f, 0.216989f)
         val channels = 3
@@ -200,13 +213,14 @@ class SignAnalyzer(
         val data = FloatArray(channels * frameCount * size * size)
         var idx = 0
 
-        for (bitmap in frames) {
-            val scaled = bitmap.scale(size, size)
-            val pixels = IntArray(size * size)
-            scaled.getPixels(pixels, 0, size, 0, 0, size, size)
-
-            // Раскладываем по каналам (CHW)
-            for (c in 0 until channels) {
+        // Модель ожидает CHW-порядок. Собираем данные блоками по каналам.
+        // Порядок в массиве: [C][T][H][W] внутри одного батча.
+        val perChannelFrameSize = size * size
+        for (c in 0 until channels) {
+            for (bitmap in frames) {
+                val scaled = Bitmap.createScaledBitmap(bitmap, size, size, true)
+                val pixels = IntArray(perChannelFrameSize)
+                scaled.getPixels(pixels, 0, size, 0, 0, size, size)
                 for (p in pixels) {
                     val value = when (c) {
                         0 -> (p shr 16 and 0xFF) / 255f
@@ -217,6 +231,7 @@ class SignAnalyzer(
                 }
             }
         }
-        return Tensor.fromBlob(data, longArrayOf(1, 3, 16, 224, 224))
+
+        return Tensor.fromBlob(data, longArrayOf(1, 3, 16, 112, 112))
     }
 }
