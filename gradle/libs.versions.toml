@@ -10,6 +10,8 @@ lifecycleRuntimeKtx = "2.11.0"
 activityCompose = "1.13.0"
 kotlin = "2.4.21"
 composeBom = "2026.09.00"
+pytorch_android = "2.1.0"
+pytorch_android_torchvision = "2.1.0"
 soloader = "0.12.1"
 
 [libraries]
@@ -32,6 +34,8 @@ androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "u
 androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+pytorch_android = { module = "org.pytorch:pytorch_android", version.ref = "pytorch_android" }
+pytorch_android_torchvision = { module = "org.pytorch:pytorch_android_torchvision", version.ref = "pytorch_android_torchvision" }
 soloader = { module = "com.facebook.soloader:soloader", version.ref = "soloader" }
 
 [plugins]
