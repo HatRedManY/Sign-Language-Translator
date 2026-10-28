@@ -28,7 +28,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import org.pytorch.IValue
 import org.pytorch.Module
-import org.pytorch.PyTorchAndroid
 import org.pytorch.Tensor
 import java.io.File
 import java.io.FileOutputStream
@@ -107,7 +106,6 @@ fun CameraScreen() {
                         .setTargetResolution(Size(640, 480))
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build()
-                        .also { it.setAnalyzer(analyzer.executor, analyzer) }
 
                     try {
                         cameraProvider.unbindAll()
@@ -184,12 +182,14 @@ class SignAnalyzer(
 
         executor.execute {
             try {
+                android.util.Log.d("SignAnalyzer", "Запуск инференса на ${frames.size} кадрах")
                 val inputTensor = preprocess(frames)
+                android.util.Log.d("SignAnalyzer", "Тензор готов: ${inputTensor.shape().contentToString()}")
                 val output = module.forward(IValue.from(inputTensor)).toTensor()
                 val scores = output.dataAsFloatArray
                 val maxIdx = scores.indices.maxByOrNull { scores[it] } ?: -1
                 val confidence = if (maxIdx >= 0) scores[maxIdx] else 0f
-
+                android.util.Log.d("SignAnalyzer", "Результат: класс=$maxIdx, уверенность=$confidence")
                 val label = if (maxIdx >= 0) {
                     "Класс #$maxIdx (уверенность: ${"%.2f".format(confidence)})"
                 } else {
@@ -197,8 +197,8 @@ class SignAnalyzer(
                 }
                 onResult(label)
             } catch (e: Exception) {
-                e.printStackTrace()
-                onResult("Ошибка инференса: ${e.message}")
+                android.util.Log.e("SignAnalyzer", "Ошибка инференса", e)
+                onResult("Ошибка: ${e.message}")
             } finally {
                 isProcessing = false
             }
