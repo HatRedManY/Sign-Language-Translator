@@ -36,6 +36,8 @@ import java.util.concurrent.Executors
 import org.pytorch.PyTorchCodegenLoader
 import androidx.core.graphics.scale
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -102,10 +104,20 @@ fun CameraScreen() {
                         it.surfaceProvider = previewView.surfaceProvider
                     }
 
+                    val resolutionSelector = ResolutionSelector.Builder()
+                        .setResolutionStrategy(
+                            ResolutionStrategy(
+                                Size(640, 480),
+                                ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER
+                            )
+                        )
+                        .build()
+
                     val imageAnalysis = ImageAnalysis.Builder()
-                        .setTargetResolution(Size(640, 480))
+                        .setResolutionSelector(resolutionSelector)
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build()
+                        .also { it.setAnalyzer(analyzer.executor, analyzer) }
 
                     try {
                         cameraProvider.unbindAll()
