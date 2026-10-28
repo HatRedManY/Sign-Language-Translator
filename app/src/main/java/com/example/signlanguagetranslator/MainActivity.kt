@@ -23,7 +23,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -36,6 +35,8 @@ import java.io.FileOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import org.pytorch.PyTorchCodegenLoader
+import androidx.core.graphics.scale
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -99,7 +100,7 @@ fun CameraScreen() {
                     val cameraProvider = cameraProviderFuture.get()
 
                     val preview = Preview.Builder().build().also {
-                        it.setSurfaceProvider(previewView.surfaceProvider)
+                        it.surfaceProvider = previewView.surfaceProvider
                     }
 
                     val imageAnalysis = ImageAnalysis.Builder()
@@ -218,7 +219,7 @@ class SignAnalyzer(
         val perChannelFrameSize = size * size
         for (c in 0 until channels) {
             for (bitmap in frames) {
-                val scaled = Bitmap.createScaledBitmap(bitmap, size, size, true)
+                val scaled = bitmap.scale(size, size)
                 val pixels = IntArray(perChannelFrameSize)
                 scaled.getPixels(pixels, 0, size, 0, 0, size, size)
                 for (p in pixels) {
