@@ -14,6 +14,8 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.*
@@ -26,18 +28,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.scale
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import org.pytorch.IValue
 import org.pytorch.Module
+import org.pytorch.PyTorchCodegenLoader
 import org.pytorch.Tensor
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import org.pytorch.PyTorchCodegenLoader
-import androidx.core.graphics.scale
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.camera.core.resolutionselector.ResolutionSelector
-import androidx.camera.core.resolutionselector.ResolutionStrategy
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -82,9 +82,11 @@ fun CameraScreen() {
     val lifecycleOwner = LocalLifecycleOwner.current
     var recognizedText by remember { mutableStateOf("Ожидание жеста…") }
 
-    // Модель загружается один раз
     val module = remember { loadModel(context) }
-    val analyzer = remember { SignAnalyzer(module) { result -> recognizedText = result } }
+    val classes = remember { loadClasses(context) }
+    val analyzer = remember {
+        SignAnalyzer(module, classes) { result -> recognizedText = result }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
@@ -151,7 +153,7 @@ fun CameraScreen() {
     }
 }
 
-// ================= PyTorch Mobile =================
+// ================= Загрузка модели и классов =================
 
 private fun loadModel(context: Context): Module {
     val modelFile = File(context.filesDir, "r3d18_slovo_100.pt")
@@ -163,10 +165,22 @@ private fun loadModel(context: Context): Module {
     return Module.load(modelFile.absolutePath)
 }
 
+private fun loadClasses(context: Context): List<String> {
+    return try {
+        context.assets.open("classes.txt").bufferedReader().useLines { lines ->
+            lines.map { it.trim() }.filter { it.isNotEmpty() }.toList()
+        }
+    } catch (e: Exception) {
+        android.util.Log.e("SignAnalyzer", "Не удалось прочитать classes.txt", e)
+        emptyList()
+    }
+}
+
 // ================= Анализатор кадров =================
 
 class SignAnalyzer(
     private val module: Module,
+    private val classes: List<String>,
     private val onResult: (String) -> Unit
 ) : ImageAnalysis.Analyzer {
 
@@ -194,19 +208,19 @@ class SignAnalyzer(
 
         executor.execute {
             try {
-                android.util.Log.d("SignAnalyzer", "Запуск инференса на ${frames.size} кадрах")
                 val inputTensor = preprocess(frames)
-                android.util.Log.d("SignAnalyzer", "Тензор готов: ${inputTensor.shape().contentToString()}")
                 val output = module.forward(IValue.from(inputTensor)).toTensor()
                 val scores = output.dataAsFloatArray
                 val maxIdx = scores.indices.maxByOrNull { scores[it] } ?: -1
                 val confidence = if (maxIdx >= 0) scores[maxIdx] else 0f
-                android.util.Log.d("SignAnalyzer", "Результат: класс=$maxIdx, уверенность=$confidence")
-                val label = if (maxIdx >= 0) {
-                    "Класс #$maxIdx (уверенность: ${"%.2f".format(confidence)})"
-                } else {
-                    "Не распознано"
+                val percent = "%.0f%%".format(confidence * 100)
+
+                val label = when {
+                    maxIdx < 0 -> "Не распознано"
+                    maxIdx < classes.size -> "${classes[maxIdx]} ($percent)"
+                    else -> "Класс #$maxIdx ($percent)"
                 }
+                android.util.Log.d("SignAnalyzer", "Результат: idx=$maxIdx, word=${classes.getOrNull(maxIdx)}, conf=$confidence")
                 onResult(label)
             } catch (e: Exception) {
                 android.util.Log.e("SignAnalyzer", "Ошибка инференса", e)
@@ -226,8 +240,6 @@ class SignAnalyzer(
         val data = FloatArray(channels * frameCount * size * size)
         var idx = 0
 
-        // Модель ожидает CHW-порядок. Собираем данные блоками по каналам.
-        // Порядок в массиве: [C][T][H][W] внутри одного батча.
         val perChannelFrameSize = size * size
         for (c in 0 until channels) {
             for (bitmap in frames) {
