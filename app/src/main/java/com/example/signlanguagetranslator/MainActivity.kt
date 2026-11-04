@@ -43,6 +43,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         PyTorchCodegenLoader.loadNativeLibs()
+        org.pytorch.PyTorchAndroid.setNumThreads(4)
         setContent { App() }
     }
 }
