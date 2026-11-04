@@ -38,12 +38,12 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import org.pytorch.LiteModuleLoader
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         PyTorchCodegenLoader.loadNativeLibs()
-        org.pytorch.PyTorchAndroid.setNumThreads(4)
         setContent { App() }
     }
 }
@@ -157,13 +157,13 @@ fun CameraScreen() {
 // ================= Загрузка модели и классов =================
 
 private fun loadModel(context: Context): Module {
-    val modelFile = File(context.filesDir, "r3d18_slovo_100.pt")
+    val modelFile = File(context.filesDir, "r3d18_slovo_100.ptl")
     if (!modelFile.exists()) {
-        context.assets.open("r3d18_slovo_100.pt").use { input ->
+        context.assets.open("r3d18_slovo_100.ptl").use { input ->
             FileOutputStream(modelFile).use { output -> input.copyTo(output) }
         }
     }
-    return Module.load(modelFile.absolutePath)
+    return LiteModuleLoader.load(modelFile.absolutePath)
 }
 
 private fun loadClasses(context: Context): List<String> {
