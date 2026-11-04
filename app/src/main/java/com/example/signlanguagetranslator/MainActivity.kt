@@ -209,8 +209,17 @@ class SignAnalyzer(
 
         executor.execute {
             try {
+                val t0 = System.currentTimeMillis()
                 val inputTensor = preprocess(frames)
+                val t1 = System.currentTimeMillis()
                 val output = module.forward(IValue.from(inputTensor)).toTensor()
+                val t2 = System.currentTimeMillis()
+
+                android.util.Log.d(
+                    "SignAnalyzer",
+                    "preprocess=${t1 - t0}ms, forward=${t2 - t1}ms, total=${t2 - t0}ms"
+                )
+
                 val scores = output.dataAsFloatArray
                 val maxIdx = scores.indices.maxByOrNull { scores[it] } ?: -1
                 val confidence = if (maxIdx >= 0) scores[maxIdx] else 0f
@@ -221,7 +230,10 @@ class SignAnalyzer(
                     maxIdx < classes.size -> "${classes[maxIdx]} ($percent)"
                     else -> "Класс #$maxIdx ($percent)"
                 }
-                android.util.Log.d("SignAnalyzer", "Результат: idx=$maxIdx, word=${classes.getOrNull(maxIdx)}, conf=$confidence")
+                android.util.Log.d(
+                    "SignAnalyzer",
+                    "Результат: idx=$maxIdx, word=${classes.getOrNull(maxIdx)}, conf=$confidence"
+                )
                 onResult(label)
             } catch (e: Exception) {
                 android.util.Log.e("SignAnalyzer", "Ошибка инференса", e)
