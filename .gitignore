@@ -1,30 +1,21 @@
-<<<<<<< HEAD
+# IDE
 .idea/
-*.bak
+*.iml
+.DS_Store
+
+# Python
 __pycache__/
 *.pyc
+
+# Сборка
 build/
 .gradle/
-local.properties
-.idea/
-*.bak
-*.apk
-*.ptl
-__pycache__/
-=======
-*.iml
-.gradle
 /local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
 /captures
 .externalNativeBuild
 .cxx
-local.properties
->>>>>>> 05637681245afe19e0abccc8b03c85075893dea9
+
+# Бэкапы и мусор
+*.bak
+*.apk
+*.ptl
