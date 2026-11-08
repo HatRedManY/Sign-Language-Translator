@@ -1,0 +1,80 @@
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
+}
+
+android {
+    namespace = "com.example.signlanguagetranslator"
+    compileSdk {
+        version = release(37)
+    }
+
+    defaultConfig {
+        applicationId = "com.example.signlanguagetranslator"
+        minSdk = 25
+        targetSdk = 37
+        versionCode = 2
+        versionName = "1.1"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // Отдельные APK под ABI, чтобы не заставлять телефон качать все библиотеки.
+    // Universal APK тоже собирается — он нужен для эмулятора и старых устройств.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = true
+        }
+    }
+
+    buildTypes {
+        release {
+            optimization {
+                enable = true
+                packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
+            }
+        }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+    buildFeatures {
+        compose = true
+    }
+}
+
+dependencies {
+    // ExecuTorch
+    //implementation(libs.executorch.android)
+
+    // PyTorch
+    implementation(libs.soloader)
+    implementation(libs.pytorch.android.lite)
+    implementation(libs.pytorch.android.torchvision.lite)
+
+    // CameraX
+    implementation(libs.androidx.camera.core)
+    implementation(libs.camera.camera2)
+    implementation(libs.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    testImplementation(libs.junit)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(libs.androidx.junit)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
+    debugImplementation(libs.androidx.compose.ui.tooling)
+}
