@@ -1,15 +1,21 @@
+# IDE
+.idea/
 *.iml
-.gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
 .DS_Store
-/build
+
+# Python
+__pycache__/
+*.pyc
+
+# Android / Gradle
+build/
+.gradle/
+local.properties
 /captures
 .externalNativeBuild
 .cxx
-local.properties
+
+# Бинарники и большие файлы
+*.apk
+*.ptl
+*.bak
