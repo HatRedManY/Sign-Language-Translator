@@ -247,6 +247,17 @@ class SignAnalyzer(
                     "preprocess=${t1 - t0}ms, forward=${t2 - t1}ms, total=${t2 - t0}ms"
                 )
 
+                // ---- Softmax: превращаем логиты в вероятности ----
+                val maxLogit = scores.maxOrNull() ?: 0f
+                var sumExp = 0f
+                for (i in scores.indices) {
+                    scores[i] = kotlin.math.exp(scores[i] - maxLogit)
+                    sumExp += scores[i]
+                }
+                if (sumExp > 0f) {
+                    for (i in scores.indices) scores[i] /= sumExp
+                }
+
                 val maxIdx = scores.indices.maxByOrNull { scores[it] } ?: -1
                 val confidence = if (maxIdx >= 0) scores[maxIdx] else 0f
                 val percent = "%.0f%%".format(confidence * 100)
