@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.scale
@@ -88,7 +89,6 @@ fun CameraScreen() {
         SignAnalyzer(env, session, classes) { result -> recognizedText = result }
     }
 
-    // Закрываем сессию при выходе из композиции
     DisposableEffect(Unit) {
         onDispose { session.close() }
     }
@@ -141,18 +141,20 @@ fun CameraScreen() {
             }
         )
 
+        // Карточка с результатами
         Card(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(16.dp)
                 .fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.7f))
+            colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.8f))
         ) {
             Text(
                 text = recognizedText,
                 modifier = Modifier.padding(16.dp),
-                style = MaterialTheme.typography.headlineSmall,
-                color = Color.White
+                style = MaterialTheme.typography.bodyLarge,
+                color = Color.White,
+                lineHeight = 24.sp
             )
         }
     }
@@ -163,7 +165,6 @@ fun CameraScreen() {
 private fun loadSession(context: Context, env: OrtEnvironment): OrtSession {
     val modelFile = File(context.filesDir, "r3d18_slovo_100.onnx")
     if (!modelFile.exists()) {
-        // Копируем 120-150 MB модели из assets — это займёт 1-2 секунды при первом запуске
         context.assets.open("r3d18_slovo_100.onnx").use { input ->
             FileOutputStream(modelFile).use { output -> input.copyTo(output) }
         }
@@ -173,8 +174,6 @@ private fun loadSession(context: Context, env: OrtEnvironment): OrtSession {
         setIntraOpNumThreads(4)
         setInterOpNumThreads(1)
         setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-        // Если решите попробовать NNAPI — раскомментируйте:
-        // addNnapi()
     }
     return env.createSession(modelFile.absolutePath, opts)
 }
@@ -247,32 +246,47 @@ class SignAnalyzer(
                     "preprocess=${t1 - t0}ms, forward=${t2 - t1}ms, total=${t2 - t0}ms"
                 )
 
-                // ---- Softmax: превращаем логиты в вероятности ----
-                val maxLogit = scores.maxOrNull() ?: 0f
-                var sumExp = 0f
-                for (i in scores.indices) {
-                    scores[i] = kotlin.math.exp(scores[i] - maxLogit)
-                    sumExp += scores[i]
-                }
-                if (sumExp > 0f) {
-                    for (i in scores.indices) scores[i] /= sumExp
+                // --- УБРАЛИ SOFTMAX ---
+                // Берем сырые логиты и умножаем на 100 (как было на скриншотах)
+
+                // Находим топ-3 индекса
+                val top3Indices = scores.indices
+                    .sortedByDescending { scores[it] }
+                    .take(3)
+
+                if (top3Indices.isEmpty()) {
+                    onResult("Не распознано")
+                    return@execute
                 }
 
-                val maxIdx = scores.indices.maxByOrNull { scores[it] } ?: -1
-                val confidence = if (maxIdx >= 0) scores[maxIdx] else 0f
-                val percent = "%.0f%%".format(confidence * 100)
+                // Формируем красивую строку
+                val top1Idx = top3Indices[0]
+                val top1Word = classes.getOrNull(top1Idx) ?: "Класс #$top1Idx"
+                val top1Conf = scores[top1Idx]
+                val top1Percent = "%.0f%%".format(top1Conf * 100)
 
-                val label = when {
-                    maxIdx < 0 -> "Не распознано"
-                    maxIdx < classes.size -> "${classes[maxIdx]} ($percent)"
-                    else -> "Класс #$maxIdx ($percent)"
+                val sb = StringBuilder()
+                sb.append("$top1Word\n")
+                sb.append("$top1Percent · ${frames.size} кадров\n\n")
+
+                for (i in top3Indices.indices) {
+                    val idx = top3Indices[i]
+                    val word = classes.getOrNull(idx) ?: "Класс #$idx"
+                    val conf = scores[idx]
+                    val pct = "%.0f%%".format(conf * 100)
+
+                    // Выравнивание с помощью табуляции
+                    sb.append("${i + 1}. $word\t$pct\n")
                 }
+
+                val resultText = sb.toString().trimEnd()
 
                 android.util.Log.d(
                     "SignAnalyzer",
-                    "Результат: idx=$maxIdx, word=${classes.getOrNull(maxIdx)}, conf=$confidence"
+                    "Результат: idx=$top1Idx, word=$top1Word, conf=$top1Conf"
                 )
-                onResult(label)
+                onResult(resultText)
+
             } catch (e: Exception) {
                 android.util.Log.e("SignAnalyzer", "Ошибка инференса", e)
                 onResult("Ошибка: ${e.message}")
