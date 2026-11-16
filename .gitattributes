@@ -1,0 +1,2 @@
+C:/Users/Pavel/Desktop/AndroidProjects/SignLanguageTranslator/app/src/main/assets/r3d18_slovo_100.pt filter=lfs diff=lfs merge=lfs -text
+*.pt filter=lfs diff=lfs merge=lfs -text
