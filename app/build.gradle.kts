@@ -38,12 +38,15 @@ android {
 
 dependencies {
     // ExecuTorch
-    //implementation(libs.executorch.android)
+//    implementation(libs.executorch.android)
 
     // PyTorch
-    implementation(libs.soloader)
-    implementation(libs.pytorch.android.lite)
-    implementation(libs.pytorch.android.torchvision.lite)
+//    implementation(libs.soloader)
+//    implementation(libs.pytorch.android.lite)
+//    implementation(libs.pytorch.android.torchvision.lite)
+
+    //ONNX Runtime
+    implementation(libs.onnxruntime.android)
 
     // CameraX
     implementation(libs.androidx.camera.core)

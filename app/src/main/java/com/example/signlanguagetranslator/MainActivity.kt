@@ -30,20 +30,18 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.scale
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import org.pytorch.IValue
-import org.pytorch.Module
-import org.pytorch.PyTorchCodegenLoader
-import org.pytorch.Tensor
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.FloatBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import org.pytorch.LiteModuleLoader
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        PyTorchCodegenLoader.loadNativeLibs()
         setContent { App() }
     }
 }
@@ -83,10 +81,16 @@ fun CameraScreen() {
     val lifecycleOwner = LocalLifecycleOwner.current
     var recognizedText by remember { mutableStateOf("Ожидание жеста…") }
 
-    val module = remember { loadModel(context) }
+    val env = remember { OrtEnvironment.getEnvironment() }
+    val session = remember { loadSession(context, env) }
     val classes = remember { loadClasses(context) }
     val analyzer = remember {
-        SignAnalyzer(module, classes) { result -> recognizedText = result }
+        SignAnalyzer(env, session, classes) { result -> recognizedText = result }
+    }
+
+    // Закрываем сессию при выходе из композиции
+    DisposableEffect(Unit) {
+        onDispose { session.close() }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -154,16 +158,25 @@ fun CameraScreen() {
     }
 }
 
-// ================= Загрузка модели и классов =================
+// ================= ONNX Runtime =================
 
-private fun loadModel(context: Context): Module {
-    val modelFile = File(context.filesDir, "r3d18_slovo_100.ptl")
+private fun loadSession(context: Context, env: OrtEnvironment): OrtSession {
+    val modelFile = File(context.filesDir, "r3d18_slovo_100.onnx")
     if (!modelFile.exists()) {
-        context.assets.open("r3d18_slovo_100.ptl").use { input ->
+        // Копируем 120-150 MB модели из assets — это займёт 1-2 секунды при первом запуске
+        context.assets.open("r3d18_slovo_100.onnx").use { input ->
             FileOutputStream(modelFile).use { output -> input.copyTo(output) }
         }
     }
-    return LiteModuleLoader.load(modelFile.absolutePath)
+
+    val opts = OrtSession.SessionOptions().apply {
+        setIntraOpNumThreads(4)
+        setInterOpNumThreads(1)
+        setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+        // Если решите попробовать NNAPI — раскомментируйте:
+        // addNnapi()
+    }
+    return env.createSession(modelFile.absolutePath, opts)
 }
 
 private fun loadClasses(context: Context): List<String> {
@@ -180,7 +193,8 @@ private fun loadClasses(context: Context): List<String> {
 // ================= Анализатор кадров =================
 
 class SignAnalyzer(
-    private val module: Module,
+    private val env: OrtEnvironment,
+    private val session: OrtSession,
     private val classes: List<String>,
     private val onResult: (String) -> Unit
 ) : ImageAnalysis.Analyzer {
@@ -208,19 +222,31 @@ class SignAnalyzer(
         frameBuffer.clear()
 
         executor.execute {
+            var inputTensor: OnnxTensor? = null
+            var result: OrtSession.Result? = null
             try {
                 val t0 = System.currentTimeMillis()
-                val inputTensor = preprocess(frames)
+                val data = preprocess(frames)
                 val t1 = System.currentTimeMillis()
-                val output = module.forward(IValue.from(inputTensor)).toTensor()
-                val t2 = System.currentTimeMillis()
 
+                inputTensor = OnnxTensor.createTensor(
+                    env,
+                    FloatBuffer.wrap(data),
+                    longArrayOf(1, 3, 16, 112, 112)
+                )
+
+                result = session.run(mapOf("input" to inputTensor))
+                val output = result[0] as OnnxTensor
+                val scores = FloatArray(output.floatBuffer.remaining()).also {
+                    output.floatBuffer.get(it)
+                }
+
+                val t2 = System.currentTimeMillis()
                 android.util.Log.d(
                     "SignAnalyzer",
                     "preprocess=${t1 - t0}ms, forward=${t2 - t1}ms, total=${t2 - t0}ms"
                 )
 
-                val scores = output.dataAsFloatArray
                 val maxIdx = scores.indices.maxByOrNull { scores[it] } ?: -1
                 val confidence = if (maxIdx >= 0) scores[maxIdx] else 0f
                 val percent = "%.0f%%".format(confidence * 100)
@@ -230,6 +256,7 @@ class SignAnalyzer(
                     maxIdx < classes.size -> "${classes[maxIdx]} ($percent)"
                     else -> "Класс #$maxIdx ($percent)"
                 }
+
                 android.util.Log.d(
                     "SignAnalyzer",
                     "Результат: idx=$maxIdx, word=${classes.getOrNull(maxIdx)}, conf=$confidence"
@@ -239,12 +266,14 @@ class SignAnalyzer(
                 android.util.Log.e("SignAnalyzer", "Ошибка инференса", e)
                 onResult("Ошибка: ${e.message}")
             } finally {
+                inputTensor?.close()
+                result?.close()
                 isProcessing = false
             }
         }
     }
 
-    private fun preprocess(frames: List<Bitmap>): Tensor {
+    private fun preprocess(frames: List<Bitmap>): FloatArray {
         val size = 112
         val mean = floatArrayOf(0.43216f, 0.394666f, 0.37645f)
         val std = floatArrayOf(0.22803f, 0.22145f, 0.216989f)
@@ -269,7 +298,6 @@ class SignAnalyzer(
                 }
             }
         }
-
-        return Tensor.fromBlob(data, longArrayOf(1, 3, 16, 112, 112))
+        return data
     }
 }
