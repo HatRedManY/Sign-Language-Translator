@@ -39,6 +39,7 @@ import java.io.FileOutputStream
 import java.nio.FloatBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import android.graphics.Matrix
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -208,8 +209,11 @@ class SignAnalyzer(
             return
         }
 
-        val bitmap = image.toBitmap()
+        val rotation = image.imageInfo.rotationDegrees
+        val raw = image.toBitmap()
         image.close()
+
+        val bitmap = if (rotation != 0) raw.rotated(rotation) else raw
 
         frameBuffer.addLast(bitmap)
         if (frameBuffer.size > 16) frameBuffer.removeFirst()
@@ -246,10 +250,6 @@ class SignAnalyzer(
                     "preprocess=${t1 - t0}ms, forward=${t2 - t1}ms, total=${t2 - t0}ms"
                 )
 
-                // --- УБРАЛИ SOFTMAX ---
-                // Берем сырые логиты и умножаем на 100 (как было на скриншотах)
-
-                // Находим топ-3 индекса
                 val top3Indices = scores.indices
                     .sortedByDescending { scores[it] }
                     .take(3)
@@ -325,4 +325,11 @@ class SignAnalyzer(
         }
         return data
     }
+}
+
+private fun Bitmap.rotated(degrees: Int): Bitmap {
+    val matrix = Matrix().apply { postRotate(degrees.toFloat()) }
+    val out = Bitmap.createBitmap(this, 0, 0, width, height, matrix, true)
+    if (out !== this) recycle()
+    return out
 }
