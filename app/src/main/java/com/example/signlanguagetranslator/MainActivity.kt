@@ -30,22 +30,27 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.scale
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import ai.onnxruntime.OnnxTensor
-import ai.onnxruntime.OrtEnvironment
-import ai.onnxruntime.OrtSession
+import org.pytorch.IValue
+import org.pytorch.LiteModuleLoader
+import org.pytorch.Module
+import org.pytorch.PyTorchAndroid
+import org.pytorch.PyTorchCodegenLoader
+import org.pytorch.Tensor
 import java.io.File
 import java.io.FileOutputStream
-import java.nio.FloatBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import kotlin.math.roundToInt
-import androidx.core.graphics.scale
 import kotlin.math.exp
+import kotlin.math.roundToInt
+import org.pytorch.LitePyTorchAndroid
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        PyTorchCodegenLoader.loadNativeLibs()
+        LitePyTorchAndroid.setNumThreads(4)
         setContent { App() }
     }
 }
@@ -85,17 +90,15 @@ fun CameraScreen() {
     val lifecycleOwner = LocalLifecycleOwner.current
     var recognizedText by remember { mutableStateOf("Ожидание жеста…") }
 
-    val env = remember { OrtEnvironment.getEnvironment() }
-    val session = remember { loadSession(context, env) }
+    val module = remember { loadModule(context) }
     val classes = remember { loadClasses(context) }
     val analyzer = remember {
-        SignAnalyzer(env, session, classes) { result -> recognizedText = result }
+        SignAnalyzer(module, classes) { result -> recognizedText = result }
     }
 
     DisposableEffect(Unit) {
         onDispose {
             analyzer.shutdown()
-            session.close()
         }
     }
 
@@ -166,22 +169,21 @@ fun CameraScreen() {
     }
 }
 
-// ================= ONNX Runtime =================
+// ================= PyTorch Lite =================
 
-private fun loadSession(context: Context, env: OrtEnvironment): OrtSession {
-    val modelFile = File(context.filesDir, "r3d18_slovo_100.onnx")
+private fun loadModule(context: Context): Module {
+    val modelFile = File(context.filesDir, "r3d18_slovo_100.ptl")
     if (!modelFile.exists()) {
-        context.assets.open("r3d18_slovo_100.onnx").use { input ->
+        context.assets.open("r3d18_slovo_100.ptl").use { input ->
             FileOutputStream(modelFile).use { output -> input.copyTo(output) }
         }
     }
-
-    val opts = OrtSession.SessionOptions().apply {
-        setIntraOpNumThreads(4)
-        setInterOpNumThreads(1)
-        setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-    }
-    return env.createSession(modelFile.absolutePath, opts)
+    // Только размер файла в filesDir — без обращения к assets.openFd()
+    android.util.Log.d(
+        "SignAnalyzer",
+        "model size = ${modelFile.length()} bytes, exists = ${modelFile.exists()}"
+    )
+    return LiteModuleLoader.load(modelFile.absolutePath)
 }
 
 private fun loadClasses(context: Context): List<String> {
@@ -198,20 +200,25 @@ private fun loadClasses(context: Context): List<String> {
 // ================= Анализатор кадров =================
 
 class SignAnalyzer(
-    private val env: OrtEnvironment,
-    private val session: OrtSession,
+    private val module: Module,
     private val classes: List<String>,
     private val onResult: (String) -> Unit
 ) : ImageAnalysis.Analyzer {
+
     val executor: ExecutorService = Executors.newSingleThreadExecutor()
+
+    // ==== Скользящий буфер (пункт 3) ====
     private data class TimedCrop(val tsMs: Long, val crop: Bitmap)
+
     private val buffer = ArrayDeque<TimedCrop>()
-    private val bufferMs = 3_000L             // история ~3 с
-    private val sampleWindowMs = 2_400L       // окно, из которого берём 16 кадров
-    private val sampleCount = 16              // вход модели R3D-18
-    private val minInferenceIntervalMs = 500L // throttle: ≤ 2 инференса/с
+    private val bufferMs = 3_000L
+    private val sampleWindowMs = 2_400L
+    private val sampleCount = 16
+    private val minInferenceIntervalMs = 500L
     private var lastInferenceMs = 0L
     private var isProcessing = false
+
+    // ==== Softmax + EMA + порог (пункт 4) ====
     private var emaProbs: FloatArray? = null
     private val emaAlpha = 0.4f
     private val confidenceThreshold = 0.35f
@@ -220,24 +227,29 @@ class SignAnalyzer(
         if (executor.isShutdown) { image.close(); return }
         if (isProcessing) { image.close(); return }
 
+        // (1) Ориентация
         val rotation = image.imageInfo.rotationDegrees
         val raw = image.toBitmap()
         image.close()
         val oriented = if (rotation != 0) raw.rotated(rotation) else raw
 
+        // (2) Resize(128 short-side) → CenterCrop(112) ДО буфера
         val crop = oriented.resizeShortSideCenterCrop(shortSide = 128, cropSize = 112)
         if (crop !== oriented) oriented.recycle()
 
         val now = System.currentTimeMillis()
 
+        // (3) Ring buffer по времени
         buffer.addLast(TimedCrop(now, crop))
         while (buffer.isNotEmpty() && now - buffer.first().tsMs > bufferMs) {
             buffer.removeFirst().crop.recycle()
         }
 
+        // (4) Throttle
         if (now - lastInferenceMs < minInferenceIntervalMs) return
         if (now - buffer.first().tsMs < sampleWindowMs) return
 
+        // (5) 16 равномерно распределённых кадров из окна 2.4 с
         val windowStart = now - sampleWindowMs
         val window = ArrayList<TimedCrop>(buffer.size)
         for (f in buffer) if (f.tsMs >= windowStart) window.add(f)
@@ -250,27 +262,23 @@ class SignAnalyzer(
             frames.add(window[idx].crop)
         }
 
+        // (6) Инференс в фоне
         isProcessing = true
         lastInferenceMs = now
         executor.execute {
-            var inputTensor: OnnxTensor? = null
-            var result: OrtSession.Result? = null
             try {
                 val t0 = System.currentTimeMillis()
                 val data = preprocess(frames)
                 val t1 = System.currentTimeMillis()
 
-                inputTensor = OnnxTensor.createTensor(
-                    env,
-                    FloatBuffer.wrap(data),
+                // FloatArray [C][T][H][W] + shape [1, 3, 16, 112, 112]
+                val inputTensor = Tensor.fromBlob(
+                    data,
                     longArrayOf(1L, 3L, sampleCount.toLong(), 112L, 112L)
                 )
-
-                result = session.run(mapOf("input" to inputTensor))
-                val output = result[0] as OnnxTensor
-                val scores = FloatArray(output.floatBuffer.remaining()).also {
-                    output.floatBuffer.get(it)
-                }
+                val scores = module.forward(IValue.from(inputTensor))
+                    .toTensor()
+                    .dataAsFloatArray
 
                 val t2 = System.currentTimeMillis()
                 android.util.Log.d(
@@ -279,8 +287,8 @@ class SignAnalyzer(
                             "frames=${frames.size}, buffer=${buffer.size}"
                 )
 
+                // (7) Softmax + EMA + top-3 + порог
                 val probs = applyEma(softmax(scores))
-
                 val sorted = probs.indices.sortedByDescending { probs[it] }
                 val top3Indices = sorted.take(3)
 
@@ -316,21 +324,19 @@ class SignAnalyzer(
                     sb.append("${i + 1}. $word\t$pct\n")
                 }
 
-                val resultText = sb.toString().trimEnd()
-
                 android.util.Log.d(
                     "SignAnalyzer",
-                    "top1=$top1Word prob=%.3f recognized=$recognized ema=${emaProbs != null}"
+                    "top1=$top1Word prob=%.3f recognized=$recognized"
                         .format(top1Prob)
                 )
-                onResult(resultText)
+                onResult(sb.toString().trimEnd())
 
             } catch (e: Exception) {
                 android.util.Log.e("SignAnalyzer", "Ошибка инференса", e)
                 onResult("Ошибка: ${e.message}")
             } finally {
-                inputTensor?.close()
-                result?.close()
+                // frames — ссылки на Bitmap из buffer'а. Здесь их НЕ recycle:
+                // buffer освободит их при вытеснении (в analyze()).
                 isProcessing = false
             }
         }
@@ -339,12 +345,17 @@ class SignAnalyzer(
     fun shutdown() {
         executor.execute {
             while (buffer.isNotEmpty()) buffer.removeFirst().crop.recycle()
+            try {
+                module.destroy()
+            } catch (e: Exception) {
+                android.util.Log.e("SignAnalyzer", "Ошибка при destroy() модуля", e)
+            }
         }
         executor.shutdown()
     }
 
     private fun preprocess(frames: List<Bitmap>): FloatArray {
-        // Кадры уже 112×112 — только кодирование в Float + нормализация.
+        // Кадры уже 112×112 — только Float + нормализация [C][T][H][W]
         val size = 112
         val mean = floatArrayOf(0.43216f, 0.394666f, 0.37645f)
         val std = floatArrayOf(0.22803f, 0.22145f, 0.216989f)
@@ -352,7 +363,7 @@ class SignAnalyzer(
         val frameCount = frames.size
         val perChannelFrameSize = size * size
         val channelStride = frameCount * perChannelFrameSize
-        val data = FloatArray(channels * channelStride)  // layout [C][T][H][W]
+        val data = FloatArray(channels * channelStride)
 
         for (t in 0 until frameCount) {
             val pixels = IntArray(perChannelFrameSize)
@@ -401,6 +412,8 @@ class SignAnalyzer(
     }
 }
 
+// ================= Bitmap helpers =================
+
 private fun Bitmap.rotated(degrees: Int): Bitmap {
     val matrix = Matrix().apply { postRotate(degrees.toFloat()) }
     val out = Bitmap.createBitmap(this, 0, 0, width, height, matrix, true)
@@ -425,7 +438,6 @@ private fun Bitmap.resizeShortSideCenterCrop(shortSide: Int, cropSize: Int): Bit
         if (left == 0 && top == 0 && newW == cropSize && newH == cropSize) resized
         else Bitmap.createBitmap(resized, left, top, cropSize, cropSize)
 
-    // Промежуточный resized нам больше не нужен
     if (cropped !== resized && resized !== this) resized.recycle()
     return cropped
 }

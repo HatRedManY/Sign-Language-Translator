@@ -34,6 +34,9 @@ android {
     buildFeatures {
         compose = true
     }
+    androidResources {
+        noCompress += "ptl"
+    }
 }
 
 dependencies {
@@ -42,11 +45,11 @@ dependencies {
 
     // PyTorch
 //    implementation(libs.soloader)
-//    implementation(libs.pytorch.android.lite)
-//    implementation(libs.pytorch.android.torchvision.lite)
+    implementation(libs.pytorch.android.lite)
+    implementation(libs.pytorch.android.torchvision.lite)
 
     //ONNX Runtime
-    implementation(libs.onnxruntime.android)
+//    implementation(libs.onnxruntime.android)
 
     // CameraX
     implementation(libs.androidx.camera.core)
