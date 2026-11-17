@@ -55,7 +55,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         PyTorchCodegenLoader.loadNativeLibs()
         try {
-            LitePyTorchAndroid.setNumThreads(4)
+            LitePyTorchAndroid.setNumThreads(1)
             android.util.Log.d("MainActivity", "PyTorch threads = 4")
         } catch (e: Throwable) {
             android.util.Log.e("MainActivity", "setNumThreads failed", e)
@@ -195,9 +195,17 @@ private fun loadModule(context: Context): Module {
 
 private fun loadClasses(context: Context): List<String> {
     return try {
-        context.assets.open("classes.txt").bufferedReader().useLines { lines ->
+        val classes = context.assets.open("classes.txt").bufferedReader().useLines { lines ->
             lines.map { it.trim() }.filter { it.isNotEmpty() }.toList()
         }
+        android.util.Log.d(
+            "SignAnalyzer",
+            "classes size=${classes.size} " +
+                    "[0..4]=${classes.take(5)} " +
+                    "[idx2]=${classes.getOrNull(2)} " +
+                    "[idx4]=${classes.getOrNull(4)}"
+        )
+        classes
     } catch (e: Exception) {
         android.util.Log.e("SignAnalyzer", "Не удалось прочитать classes.txt", e)
         emptyList()
@@ -421,6 +429,28 @@ class SignAnalyzer(
                 data[bBase + i] = (b - mean[2]) / std[2]
             }
         }
+        try {
+            val out = File(appContext.filesDir, "tensor_${System.currentTimeMillis()}.bin")
+            FileOutputStream(out).use { fos ->
+                val buf = java.nio.ByteBuffer
+                    .allocate(data.size * 4)
+                    .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                for (v in data) buf.putFloat(v)
+                fos.write(buf.array())
+            }
+            android.util.Log.d("SignAnalyzer", "tensor saved: ${out.absolutePath}")
+        } catch (e: Exception) {
+            android.util.Log.e("SignAnalyzer", "tensor save failed", e)
+        }
+
+        // min/max/mean для быстрой проверки (уже есть)
+        var mn = Float.MAX_VALUE; var mx = -Float.MAX_VALUE; var sum = 0.0
+        for (v in data) { if (v < mn) mn = v; if (v > mx) mx = v; sum += v }
+        android.util.Log.d(
+            "SignAnalyzer",
+            "tensor: min=$mn max=$mx mean=${sum / data.size}"
+        )
+
         return data
     }
 
