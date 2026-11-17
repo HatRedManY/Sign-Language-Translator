@@ -34,8 +34,8 @@ import androidx.core.graphics.scale
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import org.pytorch.IValue
 import org.pytorch.LiteModuleLoader
+import org.pytorch.LitePyTorchAndroid
 import org.pytorch.Module
-import org.pytorch.PyTorchAndroid
 import org.pytorch.PyTorchCodegenLoader
 import org.pytorch.Tensor
 import java.io.File
@@ -44,13 +44,22 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.exp
 import kotlin.math.roundToInt
-import org.pytorch.LitePyTorchAndroid
+
+// 🔧 Поставьте true на время отладки: каждый инференс будет сохранять
+// 16 входных кадров (112×112) в filesDir/debug_frames_<timestamp>/
+// Потом заберите их с телефона через Device Explorer в Android Studio.
+private const val SAVE_DEBUG_PNG = true
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         PyTorchCodegenLoader.loadNativeLibs()
-        LitePyTorchAndroid.setNumThreads(4)
+        try {
+            LitePyTorchAndroid.setNumThreads(4)
+            android.util.Log.d("MainActivity", "PyTorch threads = 4")
+        } catch (e: Throwable) {
+            android.util.Log.e("MainActivity", "setNumThreads failed", e)
+        }
         setContent { App() }
     }
 }
@@ -93,13 +102,13 @@ fun CameraScreen() {
     val module = remember { loadModule(context) }
     val classes = remember { loadClasses(context) }
     val analyzer = remember {
-        SignAnalyzer(module, classes) { result -> recognizedText = result }
+        SignAnalyzer(context.applicationContext, module, classes) { result ->
+            recognizedText = result
+        }
     }
 
     DisposableEffect(Unit) {
-        onDispose {
-            analyzer.shutdown()
-        }
+        onDispose { analyzer.shutdown() }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -150,7 +159,6 @@ fun CameraScreen() {
             }
         )
 
-        // Карточка с результатами
         Card(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -178,7 +186,6 @@ private fun loadModule(context: Context): Module {
             FileOutputStream(modelFile).use { output -> input.copyTo(output) }
         }
     }
-    // Только размер файла в filesDir — без обращения к assets.openFd()
     android.util.Log.d(
         "SignAnalyzer",
         "model size = ${modelFile.length()} bytes, exists = ${modelFile.exists()}"
@@ -200,14 +207,17 @@ private fun loadClasses(context: Context): List<String> {
 // ================= Анализатор кадров =================
 
 class SignAnalyzer(
+    private val appContext: Context,
     private val module: Module,
     private val classes: List<String>,
     private val onResult: (String) -> Unit
 ) : ImageAnalysis.Analyzer {
 
+    // analyze() вызывается CameraX в этом executor'е
     val executor: ExecutorService = Executors.newSingleThreadExecutor()
+    // Отдельный executor только для forward — чтобы не блокировать analyze()
+    private val inferenceExecutor: ExecutorService = Executors.newSingleThreadExecutor()
 
-    // ==== Скользящий буфер (пункт 3) ====
     private data class TimedCrop(val tsMs: Long, val crop: Bitmap)
 
     private val buffer = ArrayDeque<TimedCrop>()
@@ -216,16 +226,20 @@ class SignAnalyzer(
     private val sampleCount = 16
     private val minInferenceIntervalMs = 500L
     private var lastInferenceMs = 0L
-    private var isProcessing = false
 
-    // ==== Softmax + EMA + порог (пункт 4) ====
+    // @Volatile: пишется из inference-потока, читается из analyze-потока
+    @Volatile private var isProcessing = false
+
     private var emaProbs: FloatArray? = null
     private val emaAlpha = 0.4f
     private val confidenceThreshold = 0.35f
 
     override fun analyze(image: ImageProxy) {
         if (executor.isShutdown) { image.close(); return }
-        if (isProcessing) { image.close(); return }
+
+        // === КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ===
+        // Больше НЕТ `if (isProcessing) { image.close(); return }`.
+        // Кадры копятся всегда, даже пока идёт 12-секундный forward.
 
         // (1) Ориентация
         val rotation = image.imageInfo.rotationDegrees
@@ -245,33 +259,41 @@ class SignAnalyzer(
             buffer.removeFirst().crop.recycle()
         }
 
-        // (4) Throttle
+        // (4) Не запускаем второй инференс, пока идёт первый
+        if (isProcessing) return
         if (now - lastInferenceMs < minInferenceIntervalMs) return
         if (now - buffer.first().tsMs < sampleWindowMs) return
 
-        // (5) 16 равномерно распределённых кадров из окна 2.4 с
+        // (5) 16 равномерных кадров из окна [now-2.4s, now]
         val windowStart = now - sampleWindowMs
         val window = ArrayList<TimedCrop>(buffer.size)
         for (f in buffer) if (f.tsMs >= windowStart) window.add(f)
         if (window.size < sampleCount) return
 
+        // === КЛЮЧЕВОЕ: копируем Bitmap, чтобы buffer мог эволюционировать ===
+        // Каждая копия ~50 КБ. 16 копий = ~800 КБ, ~5 мс. Дёшево.
+        // isMutable = true гарантирует НОВЫЙ Bitmap (copy() может вернуть
+        // тот же instance для immutable, что привело бы к race с buffer'ом).
         val frames = ArrayList<Bitmap>(sampleCount)
         val step = (window.size - 1).toFloat() / (sampleCount - 1)
         for (i in 0 until sampleCount) {
             val idx = (i * step).roundToInt().coerceIn(0, window.size - 1)
-            frames.add(window[idx].crop)
+            frames.add(window[idx].crop.copy(Bitmap.Config.ARGB_8888, true))
         }
 
-        // (6) Инференс в фоне
+        // (6) Инференс в отдельном фоновом executor
         isProcessing = true
         lastInferenceMs = now
-        executor.execute {
+
+        inferenceExecutor.execute {
             try {
+                // Диагностика: сохраняем 16 кадров, которые видит модель
+                if (SAVE_DEBUG_PNG) saveDebugFrames(frames)
+
                 val t0 = System.currentTimeMillis()
                 val data = preprocess(frames)
                 val t1 = System.currentTimeMillis()
 
-                // FloatArray [C][T][H][W] + shape [1, 3, 16, 112, 112]
                 val inputTensor = Tensor.fromBlob(
                     data,
                     longArrayOf(1L, 3L, sampleCount.toLong(), 112L, 112L)
@@ -335,27 +357,44 @@ class SignAnalyzer(
                 android.util.Log.e("SignAnalyzer", "Ошибка инференса", e)
                 onResult("Ошибка: ${e.message}")
             } finally {
-                // frames — ссылки на Bitmap из buffer'а. Здесь их НЕ recycle:
-                // buffer освободит их при вытеснении (в analyze()).
+                // Копии — наши, их можно recycle. Buffer уже не ссылается на них.
+                frames.forEach { it.recycle() }
                 isProcessing = false
             }
         }
     }
 
     fun shutdown() {
+        // Сначала останавливаем analyze: CameraX перестанет вызывать analyze()
         executor.execute {
             while (buffer.isNotEmpty()) buffer.removeFirst().crop.recycle()
-            try {
-                module.destroy()
-            } catch (e: Exception) {
-                android.util.Log.e("SignAnalyzer", "Ошибка при destroy() модуля", e)
-            }
         }
         executor.shutdown()
+
+        // Потом даём завершиться текущему инференсу и освобождаем модель
+        if (!inferenceExecutor.isShutdown) {
+            inferenceExecutor.execute {
+                try { module.destroy() } catch (_: Exception) {}
+            }
+            inferenceExecutor.shutdown()
+        }
+    }
+
+    private fun saveDebugFrames(frames: List<Bitmap>) {
+        try {
+            val dir = File(appContext.filesDir, "debug_frames_${System.currentTimeMillis()}")
+            if (!dir.mkdirs()) return
+            frames.forEachIndexed { i, bmp ->
+                FileOutputStream(File(dir, "frame_${i.toString().padStart(2, '0')}.png"))
+                    .use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            }
+            android.util.Log.d("SignAnalyzer", "debug frames saved: ${dir.absolutePath}")
+        } catch (e: Exception) {
+            android.util.Log.e("SignAnalyzer", "saveDebugFrames failed", e)
+        }
     }
 
     private fun preprocess(frames: List<Bitmap>): FloatArray {
-        // Кадры уже 112×112 — только Float + нормализация [C][T][H][W]
         val size = 112
         val mean = floatArrayOf(0.43216f, 0.394666f, 0.37645f)
         val std = floatArrayOf(0.22803f, 0.22145f, 0.216989f)
@@ -363,7 +402,7 @@ class SignAnalyzer(
         val frameCount = frames.size
         val perChannelFrameSize = size * size
         val channelStride = frameCount * perChannelFrameSize
-        val data = FloatArray(channels * channelStride)
+        val data = FloatArray(channels * channelStride)  // [C][T][H][W]
 
         for (t in 0 until frameCount) {
             val pixels = IntArray(perChannelFrameSize)
