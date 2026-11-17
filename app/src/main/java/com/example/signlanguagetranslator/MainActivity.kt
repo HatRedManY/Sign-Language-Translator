@@ -41,6 +41,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 import androidx.core.graphics.scale
+import kotlin.math.exp
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -202,14 +203,8 @@ class SignAnalyzer(
     private val classes: List<String>,
     private val onResult: (String) -> Unit
 ) : ImageAnalysis.Analyzer {
-
     val executor: ExecutorService = Executors.newSingleThreadExecutor()
-
-    // ==== Скользящий буфер (пункт 3) ====
-    // Храним уже-ориентированные и уже-препроцессированные кропы 112×112
-    // с таймстампами. Так 3-секундный буфер занимает ~4.5 МБ, а не ~100 МБ.
     private data class TimedCrop(val tsMs: Long, val crop: Bitmap)
-
     private val buffer = ArrayDeque<TimedCrop>()
     private val bufferMs = 3_000L             // история ~3 с
     private val sampleWindowMs = 2_400L       // окно, из которого берём 16 кадров
@@ -217,37 +212,32 @@ class SignAnalyzer(
     private val minInferenceIntervalMs = 500L // throttle: ≤ 2 инференса/с
     private var lastInferenceMs = 0L
     private var isProcessing = false
+    private var emaProbs: FloatArray? = null
+    private val emaAlpha = 0.4f
+    private val confidenceThreshold = 0.35f
 
     override fun analyze(image: ImageProxy) {
         if (executor.isShutdown) { image.close(); return }
         if (isProcessing) { image.close(); return }
 
-        // (1) Ориентация: CameraX отдаёт пиксели в ориентации сенсора.
         val rotation = image.imageInfo.rotationDegrees
         val raw = image.toBitmap()
         image.close()
         val oriented = if (rotation != 0) raw.rotated(rotation) else raw
 
-        // (2) Препроцессинг ДО буфера: Resize(128) short-side → CenterCrop(112),
-        //     как при обучении. Дальше в памяти держим только 112×112.
         val crop = oriented.resizeShortSideCenterCrop(shortSide = 128, cropSize = 112)
         if (crop !== oriented) oriented.recycle()
 
         val now = System.currentTimeMillis()
 
-        // (3) Ring buffer с вытеснением по времени
         buffer.addLast(TimedCrop(now, crop))
         while (buffer.isNotEmpty() && now - buffer.first().tsMs > bufferMs) {
             buffer.removeFirst().crop.recycle()
         }
 
-        // (4) Throttle: не чаще 2 инференсов в секунду
         if (now - lastInferenceMs < minInferenceIntervalMs) return
-
-        // (5) Ждём, пока накопится хотя бы окно 2.4 с
         if (now - buffer.first().tsMs < sampleWindowMs) return
 
-        // (6) Берём 16 РАВНОМЕРНО распределённых кадров из окна [now-2.4s, now]
         val windowStart = now - sampleWindowMs
         val window = ArrayList<TimedCrop>(buffer.size)
         for (f in buffer) if (f.tsMs >= windowStart) window.add(f)
@@ -260,7 +250,6 @@ class SignAnalyzer(
             frames.add(window[idx].crop)
         }
 
-        // (7) Инференс в фоне
         isProcessing = true
         lastInferenceMs = now
         executor.execute {
@@ -290,30 +279,40 @@ class SignAnalyzer(
                             "frames=${frames.size}, buffer=${buffer.size}"
                 )
 
-                val top3Indices = scores.indices
-                    .sortedByDescending { scores[it] }
-                    .take(3)
+                val probs = applyEma(softmax(scores))
+
+                val sorted = probs.indices.sortedByDescending { probs[it] }
+                val top3Indices = sorted.take(3)
 
                 if (top3Indices.isEmpty()) {
                     onResult("Не распознано")
                     return@execute
                 }
 
-                // Формируем красивую строку
                 val top1Idx = top3Indices[0]
+                val top1Prob = probs[top1Idx]
                 val top1Word = classes.getOrNull(top1Idx) ?: "Класс #$top1Idx"
-                val top1Conf = scores[top1Idx]
-                val top1Percent = "%.0f%%".format(top1Conf * 100)
+                val recognized = top1Prob >= confidenceThreshold
 
                 val sb = StringBuilder()
-                sb.append("$top1Word\n")
-                sb.append("$top1Percent · ${frames.size} кадров / 2.4 с\n\n")
+                if (recognized) {
+                    sb.append("$top1Word\n")
+                    sb.append(
+                        "%.0f%% · ${frames.size} кадров / 2.4 с\n\n"
+                            .format(top1Prob * 100)
+                    )
+                } else {
+                    sb.append("Не распознано\n")
+                    sb.append(
+                        "уверенность %.0f%% < порог %.0f%%\n\n"
+                            .format(top1Prob * 100, confidenceThreshold * 100)
+                    )
+                }
 
                 for (i in top3Indices.indices) {
                     val idx = top3Indices[i]
                     val word = classes.getOrNull(idx) ?: "Класс #$idx"
-                    val conf = scores[idx]
-                    val pct = "%.0f%%".format(conf * 100)
+                    val pct = "%.0f%%".format(probs[idx] * 100)
                     sb.append("${i + 1}. $word\t$pct\n")
                 }
 
@@ -321,7 +320,8 @@ class SignAnalyzer(
 
                 android.util.Log.d(
                     "SignAnalyzer",
-                    "Результат: idx=$top1Idx, word=$top1Word, conf=$top1Conf"
+                    "top1=$top1Word prob=%.3f recognized=$recognized ema=${emaProbs != null}"
+                        .format(top1Prob)
                 )
                 onResult(resultText)
 
@@ -331,8 +331,6 @@ class SignAnalyzer(
             } finally {
                 inputTensor?.close()
                 result?.close()
-                // ВАЖНО: frames — это ссылки на Bitmap из buffer'а.
-                // Здесь их НЕ recycle: buffer освободит их при вытеснении.
                 isProcessing = false
             }
         }
@@ -374,6 +372,32 @@ class SignAnalyzer(
             }
         }
         return data
+    }
+
+    private fun softmax(logits: FloatArray): FloatArray {
+        var max = Float.NEGATIVE_INFINITY
+        for (v in logits) if (v > max) max = v
+        val out = FloatArray(logits.size)
+        var sum = 0f
+        for (i in logits.indices) {
+            val e = exp((logits[i] - max).toDouble()).toFloat()
+            out[i] = e
+            sum += e
+        }
+        if (sum > 0f) for (i in out.indices) out[i] /= sum
+        return out
+    }
+
+    private fun applyEma(probs: FloatArray): FloatArray {
+        val prev = emaProbs
+        if (prev == null || prev.size != probs.size) {
+            emaProbs = probs.copyOf()
+            return emaProbs!!
+        }
+        for (i in probs.indices) {
+            prev[i] = emaAlpha * probs[i] + (1f - emaAlpha) * prev[i]
+        }
+        return prev
     }
 }
 
