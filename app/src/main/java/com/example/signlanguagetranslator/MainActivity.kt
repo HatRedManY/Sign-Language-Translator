@@ -40,6 +40,7 @@ import java.nio.FloatBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import android.graphics.Matrix
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -299,28 +300,48 @@ class SignAnalyzer(
     }
 
     private fun preprocess(frames: List<Bitmap>): FloatArray {
-        val size = 112
+        // При обучении: torchvision Resize(128) → CenterCrop(112)
+        val shortSide = 128
+        val cropSize = 112
         val mean = floatArrayOf(0.43216f, 0.394666f, 0.37645f)
         val std = floatArrayOf(0.22803f, 0.22145f, 0.216989f)
         val channels = 3
         val frameCount = frames.size
-        val data = FloatArray(channels * frameCount * size * size)
-        var idx = 0
+        val perChannelFrameSize = cropSize * cropSize
+        val channelStride = frameCount * perChannelFrameSize
+        val data = FloatArray(channels * channelStride)  // layout [C][T][H][W]
 
-        val perChannelFrameSize = size * size
-        for (c in 0 until channels) {
-            for (bitmap in frames) {
-                val scaled = bitmap.scale(size, size)
-                val pixels = IntArray(perChannelFrameSize)
-                scaled.getPixels(pixels, 0, size, 0, 0, size, size)
-                for (p in pixels) {
-                    val value = when (c) {
-                        0 -> (p shr 16 and 0xFF) / 255f
-                        1 -> (p shr 8 and 0xFF) / 255f
-                        else -> (p and 0xFF) / 255f
-                    }
-                    data[idx++] = (value - mean[c]) / std[c]
-                }
+        for (t in 0 until frameCount) {
+            val src = frames[t]
+
+            val w = src.width
+            val h = src.height
+            val scale = shortSide.toFloat() / minOf(w, h)
+            val newW = (w * scale).roundToInt().coerceAtLeast(cropSize)
+            val newH = (h * scale).roundToInt().coerceAtLeast(cropSize)
+            val resized = src.scale(newW, newH)
+
+            val left = (newW - cropSize) / 2
+            val top = (newH - cropSize) / 2
+            val cropped = Bitmap.createBitmap(resized, left, top, cropSize, cropSize)
+            if (cropped !== resized) resized.recycle()
+
+            val pixels = IntArray(perChannelFrameSize)
+            cropped.getPixels(pixels, 0, cropSize, 0, 0, cropSize, cropSize)
+            if (cropped !== src) cropped.recycle()
+
+            val frameOffset = t * perChannelFrameSize
+            val rBase = 0 + frameOffset
+            val gBase = 1 * channelStride + frameOffset
+            val bBase = 2 * channelStride + frameOffset
+            for (i in 0 until perChannelFrameSize) {
+                val p = pixels[i]
+                val r = ((p shr 16) and 0xFF) / 255f
+                val g = ((p shr 8) and 0xFF) / 255f
+                val b = (p and 0xFF) / 255f
+                data[rBase + i] = (r - mean[0]) / std[0]
+                data[gBase + i] = (g - mean[1]) / std[1]
+                data[bBase + i] = (b - mean[2]) / std[2]
             }
         }
         return data
