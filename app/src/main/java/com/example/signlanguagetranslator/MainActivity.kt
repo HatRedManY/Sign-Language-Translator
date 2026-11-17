@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.os.Bundle
 import android.util.Size
 import androidx.activity.ComponentActivity
@@ -29,7 +30,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import androidx.core.graphics.scale
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
@@ -39,8 +39,8 @@ import java.io.FileOutputStream
 import java.nio.FloatBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import android.graphics.Matrix
 import kotlin.math.roundToInt
+import androidx.core.graphics.scale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -92,7 +92,10 @@ fun CameraScreen() {
     }
 
     DisposableEffect(Unit) {
-        onDispose { session.close() }
+        onDispose {
+            analyzer.shutdown()
+            session.close()
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -201,30 +204,65 @@ class SignAnalyzer(
 ) : ImageAnalysis.Analyzer {
 
     val executor: ExecutorService = Executors.newSingleThreadExecutor()
-    private val frameBuffer = ArrayDeque<Bitmap>(16)
+
+    // ==== Скользящий буфер (пункт 3) ====
+    // Храним уже-ориентированные и уже-препроцессированные кропы 112×112
+    // с таймстампами. Так 3-секундный буфер занимает ~4.5 МБ, а не ~100 МБ.
+    private data class TimedCrop(val tsMs: Long, val crop: Bitmap)
+
+    private val buffer = ArrayDeque<TimedCrop>()
+    private val bufferMs = 3_000L             // история ~3 с
+    private val sampleWindowMs = 2_400L       // окно, из которого берём 16 кадров
+    private val sampleCount = 16              // вход модели R3D-18
+    private val minInferenceIntervalMs = 500L // throttle: ≤ 2 инференса/с
+    private var lastInferenceMs = 0L
     private var isProcessing = false
 
     override fun analyze(image: ImageProxy) {
-        if (isProcessing) {
-            image.close()
-            return
-        }
+        if (executor.isShutdown) { image.close(); return }
+        if (isProcessing) { image.close(); return }
 
+        // (1) Ориентация: CameraX отдаёт пиксели в ориентации сенсора.
         val rotation = image.imageInfo.rotationDegrees
         val raw = image.toBitmap()
         image.close()
+        val oriented = if (rotation != 0) raw.rotated(rotation) else raw
 
-        val bitmap = if (rotation != 0) raw.rotated(rotation) else raw
+        // (2) Препроцессинг ДО буфера: Resize(128) short-side → CenterCrop(112),
+        //     как при обучении. Дальше в памяти держим только 112×112.
+        val crop = oriented.resizeShortSideCenterCrop(shortSide = 128, cropSize = 112)
+        if (crop !== oriented) oriented.recycle()
 
-        frameBuffer.addLast(bitmap)
-        if (frameBuffer.size > 16) frameBuffer.removeFirst()
+        val now = System.currentTimeMillis()
 
-        if (frameBuffer.size < 16) return
+        // (3) Ring buffer с вытеснением по времени
+        buffer.addLast(TimedCrop(now, crop))
+        while (buffer.isNotEmpty() && now - buffer.first().tsMs > bufferMs) {
+            buffer.removeFirst().crop.recycle()
+        }
 
+        // (4) Throttle: не чаще 2 инференсов в секунду
+        if (now - lastInferenceMs < minInferenceIntervalMs) return
+
+        // (5) Ждём, пока накопится хотя бы окно 2.4 с
+        if (now - buffer.first().tsMs < sampleWindowMs) return
+
+        // (6) Берём 16 РАВНОМЕРНО распределённых кадров из окна [now-2.4s, now]
+        val windowStart = now - sampleWindowMs
+        val window = ArrayList<TimedCrop>(buffer.size)
+        for (f in buffer) if (f.tsMs >= windowStart) window.add(f)
+        if (window.size < sampleCount) return
+
+        val frames = ArrayList<Bitmap>(sampleCount)
+        val step = (window.size - 1).toFloat() / (sampleCount - 1)
+        for (i in 0 until sampleCount) {
+            val idx = (i * step).roundToInt().coerceIn(0, window.size - 1)
+            frames.add(window[idx].crop)
+        }
+
+        // (7) Инференс в фоне
         isProcessing = true
-        val frames = frameBuffer.toList()
-        frameBuffer.clear()
-
+        lastInferenceMs = now
         executor.execute {
             var inputTensor: OnnxTensor? = null
             var result: OrtSession.Result? = null
@@ -236,7 +274,7 @@ class SignAnalyzer(
                 inputTensor = OnnxTensor.createTensor(
                     env,
                     FloatBuffer.wrap(data),
-                    longArrayOf(1, 3, 16, 112, 112)
+                    longArrayOf(1L, 3L, sampleCount.toLong(), 112L, 112L)
                 )
 
                 result = session.run(mapOf("input" to inputTensor))
@@ -248,7 +286,8 @@ class SignAnalyzer(
                 val t2 = System.currentTimeMillis()
                 android.util.Log.d(
                     "SignAnalyzer",
-                    "preprocess=${t1 - t0}ms, forward=${t2 - t1}ms, total=${t2 - t0}ms"
+                    "preprocess=${t1 - t0}ms, forward=${t2 - t1}ms, total=${t2 - t0}ms, " +
+                            "frames=${frames.size}, buffer=${buffer.size}"
                 )
 
                 val top3Indices = scores.indices
@@ -268,15 +307,13 @@ class SignAnalyzer(
 
                 val sb = StringBuilder()
                 sb.append("$top1Word\n")
-                sb.append("$top1Percent · ${frames.size} кадров\n\n")
+                sb.append("$top1Percent · ${frames.size} кадров / 2.4 с\n\n")
 
                 for (i in top3Indices.indices) {
                     val idx = top3Indices[i]
                     val word = classes.getOrNull(idx) ?: "Класс #$idx"
                     val conf = scores[idx]
                     val pct = "%.0f%%".format(conf * 100)
-
-                    // Выравнивание с помощью табуляции
                     sb.append("${i + 1}. $word\t$pct\n")
                 }
 
@@ -294,42 +331,34 @@ class SignAnalyzer(
             } finally {
                 inputTensor?.close()
                 result?.close()
+                // ВАЖНО: frames — это ссылки на Bitmap из buffer'а.
+                // Здесь их НЕ recycle: buffer освободит их при вытеснении.
                 isProcessing = false
             }
         }
     }
 
+    fun shutdown() {
+        executor.execute {
+            while (buffer.isNotEmpty()) buffer.removeFirst().crop.recycle()
+        }
+        executor.shutdown()
+    }
+
     private fun preprocess(frames: List<Bitmap>): FloatArray {
-        // При обучении: torchvision Resize(128) → CenterCrop(112)
-        val shortSide = 128
-        val cropSize = 112
+        // Кадры уже 112×112 — только кодирование в Float + нормализация.
+        val size = 112
         val mean = floatArrayOf(0.43216f, 0.394666f, 0.37645f)
         val std = floatArrayOf(0.22803f, 0.22145f, 0.216989f)
         val channels = 3
         val frameCount = frames.size
-        val perChannelFrameSize = cropSize * cropSize
+        val perChannelFrameSize = size * size
         val channelStride = frameCount * perChannelFrameSize
         val data = FloatArray(channels * channelStride)  // layout [C][T][H][W]
 
         for (t in 0 until frameCount) {
-            val src = frames[t]
-
-            val w = src.width
-            val h = src.height
-            val scale = shortSide.toFloat() / minOf(w, h)
-            val newW = (w * scale).roundToInt().coerceAtLeast(cropSize)
-            val newH = (h * scale).roundToInt().coerceAtLeast(cropSize)
-            val resized = src.scale(newW, newH)
-
-            val left = (newW - cropSize) / 2
-            val top = (newH - cropSize) / 2
-            val cropped = Bitmap.createBitmap(resized, left, top, cropSize, cropSize)
-            if (cropped !== resized) resized.recycle()
-
             val pixels = IntArray(perChannelFrameSize)
-            cropped.getPixels(pixels, 0, cropSize, 0, 0, cropSize, cropSize)
-            if (cropped !== src) cropped.recycle()
-
+            frames[t].getPixels(pixels, 0, size, 0, 0, size, size)
             val frameOffset = t * perChannelFrameSize
             val rBase = 0 + frameOffset
             val gBase = 1 * channelStride + frameOffset
@@ -353,4 +382,26 @@ private fun Bitmap.rotated(degrees: Int): Bitmap {
     val out = Bitmap.createBitmap(this, 0, 0, width, height, matrix, true)
     if (out !== this) recycle()
     return out
+}
+
+private fun Bitmap.resizeShortSideCenterCrop(shortSide: Int, cropSize: Int): Bitmap {
+    val w = width
+    val h = height
+    val scale = shortSide.toFloat() / minOf(w, h)
+    val newW = (w * scale).roundToInt().coerceAtLeast(cropSize)
+    val newH = (h * scale).roundToInt().coerceAtLeast(cropSize)
+
+    val resized =
+        if (newW == w && newH == h) this
+        else this.scale(newW, newH)
+
+    val left = (newW - cropSize) / 2
+    val top = (newH - cropSize) / 2
+    val cropped =
+        if (left == 0 && top == 0 && newW == cropSize && newH == cropSize) resized
+        else Bitmap.createBitmap(resized, left, top, cropSize, cropSize)
+
+    // Промежуточный resized нам больше не нужен
+    if (cropped !== resized && resized !== this) resized.recycle()
+    return cropped
 }
