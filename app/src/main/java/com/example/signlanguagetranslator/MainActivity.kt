@@ -41,6 +41,7 @@ import com.example.signlanguagetranslator.data.SettingsStore
 import com.example.signlanguagetranslator.logic.HistoryRecorder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.pytorch.LiteModuleLoader
@@ -119,11 +120,18 @@ fun CameraScreen() {
     var errorText by remember { mutableStateOf<String?>(null) }
 
     val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
     val historyRepository = remember { HistoryRepository(context) }
     val settings = remember { SettingsStore(context) }
     val recorder = remember {
         HistoryRecorder(historyRepository, settings, scope) { word, confidence ->
             Log.d(TAG, "Автосохранение: $word ${(confidence * 100).roundToInt()}%")
+            scope.launch {
+                snackbarHostState.showSnackbar(
+                    message = "Сохранено: $word · ${(confidence * 100).roundToInt()}%",
+                    duration = SnackbarDuration.Short
+                )
+            }
         }
     }
 
@@ -234,6 +242,14 @@ fun CameraScreen() {
                 Text(if (useFrontCamera) "Передняя" else "Задняя")
             }
         }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 64.dp, start = 16.dp, end = 16.dp)
+        )
 
         if (analyzer == null) {
             Column(
