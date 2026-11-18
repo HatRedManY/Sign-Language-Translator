@@ -42,6 +42,7 @@ import com.example.signlanguagetranslator.data.HistorySession
 import com.example.signlanguagetranslator.data.SettingsStore
 import com.example.signlanguagetranslator.logic.HistoryRecorder
 import com.example.signlanguagetranslator.ui.HistoryScreen
+import com.example.signlanguagetranslator.ui.SettingsScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
@@ -132,6 +133,7 @@ fun CameraScreen() {
     val snackbarHostState = remember { SnackbarHostState() }
     val historyRepository = remember { HistoryRepository(context) }
     val settings = remember { SettingsStore(context) }
+    var saveThreshold by remember { mutableStateOf(settings.saveThreshold) }
     val recorder = remember {
         HistoryRecorder(historyRepository, settings, scope) { word, confidence ->
             Log.d(TAG, "Автосохранение: $word ${(confidence * 100).roundToInt()}%")
@@ -247,19 +249,16 @@ fun CameraScreen() {
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
+                .padding(horizontal = 8.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(onClick = { screen = Screen.History }) {
-                    Text("История")
-                }
-                FilledTonalButton(onClick = { showWords = true }) {
-                    Text("Слова")
-                }
-            }
-            FilledTonalButton(onClick = { useFrontCamera = !useFrontCamera }) {
-                Text(if (useFrontCamera) "Передняя" else "Задняя")
+            CompactButton("История") { screen = Screen.History }
+            CompactButton("Слова") { showWords = true }
+            CompactButton("Настройки") { screen = Screen.Settings }
+            Spacer(Modifier.weight(1f))
+            CompactButton(if (useFrontCamera) "Передняя" else "Задняя") {
+                useFrontCamera = !useFrontCamera
             }
         }
 
@@ -312,18 +311,7 @@ fun CameraScreen() {
         }
 
         if (screen == Screen.History) {
-            // Перехватываем касания, чтобы они не доходили до кнопок камеры под экраном.
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(Unit) {
-                        awaitPointerEventScope {
-                            while (true) {
-                                awaitPointerEvent()
-                            }
-                        }
-                    }
-            ) {
+            TapBlockingOverlay {
                 HistoryScreen(
                     sessions = sessions,
                     onBack = { screen = Screen.Camera },
@@ -338,6 +326,51 @@ fun CameraScreen() {
                 )
             }
         }
+
+        if (screen == Screen.Settings) {
+            TapBlockingOverlay {
+                SettingsScreen(
+                    threshold = saveThreshold,
+                    onThresholdChange = { value ->
+                        saveThreshold = value
+                        settings.saveThreshold = value
+                    },
+                    onBack = { screen = Screen.Camera }
+                )
+            }
+        }
+    }
+}
+
+/** Кнопка компактного размера для верхней панели камеры. */
+@Composable
+private fun CompactButton(text: String, onClick: () -> Unit) {
+    FilledTonalButton(
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+    ) {
+        Text(text = text, style = MaterialTheme.typography.labelLarge)
+    }
+}
+
+/**
+ * Полноэкранная накладка, которая перехватывает касания,
+ * чтобы они не доходили до кнопок камеры под ней.
+ */
+@Composable
+private fun TapBlockingOverlay(content: @Composable () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent()
+                    }
+                }
+            }
+    ) {
+        content()
     }
 }
 
