@@ -210,6 +210,9 @@ fun CameraScreen() {
         val imageAnalysis = ImageAnalysis.Builder()
             .setResolutionSelector(resolutionSelector)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            // CameraX сам отдаёт RGBA — toBitmap() становится дешёвым копированием
+            // вместо конвертации YUV на каждом кадре.
+            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
             .build()
             .also { it.setAnalyzer(activeAnalyzer.executor, activeAnalyzer) }
 
