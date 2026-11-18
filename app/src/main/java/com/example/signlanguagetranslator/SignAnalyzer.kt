@@ -8,6 +8,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import com.example.signlanguagetranslator.logic.RecognitionMode
 import org.pytorch.IValue
 import org.pytorch.Module
 import org.pytorch.Tensor
@@ -37,15 +38,18 @@ data class Prediction(
  * Что здесь исправлено по сравнению с исходной версией:
  *  1. Учитывается rotationDegrees — кадр поворачивается в нормальную ориентацию.
  *  2. Кадр готовится так же, как при обучении: short side 128 -> center crop 112.
- *  3. Кадры не сбрасываются после каждого инференса: хранится скользящее окно ~2.4 с,
- *     из которого равномерно выбираются 16 кадров.
+ *  3. Кадры не сбрасываются после каждого инференса: хранится скользящее окно
+ *     (длительность зависит от профиля скорости), из которого равномерно
+ *     выбираются 16 кадров.
  *  4. Модель возвращает логиты -> применяется softmax.
  *  5. Есть EMA-сглаживание и порог уверенности, чтобы не показывать случайный класс.
  *  6. Предобработка делается один раз на кадр, а не 3 раза (по каналам).
+ *  7. Скорость реакции настраивается профилем [RecognitionMode].
  */
 class SignAnalyzer(
     private val module: Module,
     private val classes: List<String>,
+    initialMode: RecognitionMode = RecognitionMode.DEFAULT,
     private val onResult: (Prediction) -> Unit
 ) : ImageAnalysis.Analyzer, AutoCloseable {
 
@@ -57,18 +61,14 @@ class SignAnalyzer(
         private const val SHORT_SIDE = 128
         private const val CHANNELS = 3
 
-        private const val CAPTURE_INTERVAL_MS = 66L      // ~15 fps в буфер
-        private const val WINDOW_MS = 2400L              // окно жеста
-        private const val BUFFER_MS = 3000L              // сколько храним
-        private const val MAX_BUFFER_FRAMES = 64
-        private const val INFERENCE_INTERVAL_MS = 500L   // не чаще 2 раз/сек
+        private const val MAX_BUFFER_FRAMES = 96          // ~3 с при 30 fps
         private const val MIN_FRAMES = 16
         private const val RESET_GAP_MS = 1200L
+        private const val BUFFER_EXTRA_MS = 800L
 
         // 0.35 — компромисс: на тесте Slovo это ~74% покрытия при ~84% точности
         // среди принятых предсказаний. 0.40 даёт ~69% покрытия и ~86% точности.
         private const val MIN_CONFIDENCE = 0.35f
-        private const val EMA_ALPHA = 0.55f
 
         private val MEAN = floatArrayOf(0.43216f, 0.394666f, 0.37645f)
         private val STD = floatArrayOf(0.22803f, 0.22145f, 0.216989f)
@@ -80,6 +80,13 @@ class SignAnalyzer(
     private val inferenceExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val lock = Any()
+
+    /**
+     * Профиль скорости. Можно менять на лету: новые параметры
+     * применятся со следующего кадра.
+     */
+    @Volatile
+    var mode: RecognitionMode = initialMode
 
     private val buffer = ArrayDeque<Frame>(MAX_BUFFER_FRAMES)
 
@@ -98,6 +105,31 @@ class SignAnalyzer(
     @Volatile private var clearBufferRequested = false
 
     private data class Frame(val timestampMs: Long, val pixels: IntArray)
+
+    init {
+        // Первый forward на телефоне всегда медленнее: подгрузка весов,
+        // аллокации, инициализация ядер. Делаем его заранее, пока камера
+        // ещё накапливает первые кадры.
+        inferenceExecutor.execute {
+            try {
+                val t0 = System.currentTimeMillis()
+                val zeros = Tensor.fromBlob(
+                    FloatArray(CHANNELS * FRAME_COUNT * INPUT_SIZE * INPUT_SIZE),
+                    longArrayOf(
+                        1L,
+                        CHANNELS.toLong(),
+                        FRAME_COUNT.toLong(),
+                        INPUT_SIZE.toLong(),
+                        INPUT_SIZE.toLong()
+                    )
+                )
+                module.forward(IValue.from(zeros)).toTensor()
+                Log.d(TAG, "warm-up ${System.currentTimeMillis() - t0}ms")
+            } catch (t: Throwable) {
+                Log.w(TAG, "warm-up не удался", t)
+            }
+        }
+    }
 
     /**
      * Ставит обработку кадров на паузу.
@@ -146,8 +178,8 @@ class SignAnalyzer(
                 }
             }
 
-            // Не кладём в буфер каждый кадр камеры — 15 fps более чем достаточно.
-            if (lastCaptureMs != 0L && nowMs - lastCaptureMs < CAPTURE_INTERVAL_MS) {
+            // Не кладём в буфер каждый кадр камеры — частота зависит от профиля.
+            if (lastCaptureMs != 0L && nowMs - lastCaptureMs < mode.captureIntervalMs) {
                 return
             }
             lastCaptureMs = nowMs
@@ -182,8 +214,9 @@ class SignAnalyzer(
                 }
 
                 buffer.addLast(Frame(nowMs, pixels))
+                val keepMs = mode.windowMs + BUFFER_EXTRA_MS
                 while (buffer.size > MAX_BUFFER_FRAMES ||
-                    (buffer.isNotEmpty() && nowMs - buffer.first().timestampMs > BUFFER_MS)
+                    (buffer.isNotEmpty() && nowMs - buffer.first().timestampMs > keepMs)
                 ) {
                     buffer.removeFirst()
                 }
@@ -200,19 +233,22 @@ class SignAnalyzer(
     private fun maybeRunInference(nowMs: Long) {
         if (inferenceBusy) return
         if (lastInferenceMs != 0L && nowMs < lastInferenceMs) lastInferenceMs = 0L
-        if (lastInferenceMs != 0L && nowMs - lastInferenceMs < INFERENCE_INTERVAL_MS) return
+        if (lastInferenceMs != 0L && nowMs - lastInferenceMs < mode.inferenceIntervalMs) return
 
         var snapshot: List<Frame>? = null
         synchronized(lock) {
             if (buffer.size < MIN_FRAMES) return
 
+            val windowMs = mode.windowMs
             val end = buffer.last().timestampMs
-            val start = (end - WINDOW_MS).coerceAtLeast(buffer.first().timestampMs)
+            val start = (end - windowMs).coerceAtLeast(buffer.first().timestampMs)
             val window = buffer.filter { it.timestampMs >= start }
             if (window.size < MIN_FRAMES) return
-            // Не запускаем инференс на «недогретом» окне: модель обучалась на
-            // клипах ~2 с, поэтому ждём хотя бы 80% окна (1.92 с).
-            if (window.last().timestampMs - window.first().timestampMs < (WINDOW_MS * 0.8).toLong()) return
+            // Не запускаем инференс на «недогретом» окне: ждём долю окна,
+            // заданную профилем (для «Точно» это 80%, для «Быстро» — 60%).
+            if (window.last().timestampMs - window.first().timestampMs <
+                (windowMs * mode.minWindowFraction).toLong()
+            ) return
 
             snapshot = uniformSample(window, FRAME_COUNT)
         }
@@ -329,11 +365,12 @@ class SignAnalyzer(
     /** EMA по вероятностям: убирает «мигание» между похожими классами. */
     private fun smooth(probs: FloatArray): FloatArray {
         val prev = ema
+        val alpha = mode.emaAlpha
         val out = if (prev == null || prev.size != probs.size) {
             probs.copyOf()
         } else {
             FloatArray(probs.size) { i ->
-                EMA_ALPHA * probs[i] + (1f - EMA_ALPHA) * prev[i]
+                alpha * probs[i] + (1f - alpha) * prev[i]
             }
         }
         ema = out
