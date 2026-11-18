@@ -36,6 +36,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.signlanguagetranslator.data.HistoryRepository
+import com.example.signlanguagetranslator.data.SettingsStore
+import com.example.signlanguagetranslator.logic.HistoryRecorder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -115,13 +118,25 @@ fun CameraScreen() {
     var useFrontCamera by remember { mutableStateOf(false) }
     var errorText by remember { mutableStateOf<String?>(null) }
 
+    val scope = rememberCoroutineScope()
+    val historyRepository = remember { HistoryRepository(context) }
+    val settings = remember { SettingsStore(context) }
+    val recorder = remember {
+        HistoryRecorder(historyRepository, settings, scope) { word, confidence ->
+            Log.d(TAG, "Автосохранение: $word ${(confidence * 100).roundToInt()}%")
+        }
+    }
+
     LaunchedEffect(Unit) {
         try {
             val model = loadModel(context)
             val loadedClasses = withContext(Dispatchers.IO) { loadClasses(context) }
             require(loadedClasses.isNotEmpty()) { "classes.txt пуст или не найден" }
             classes = loadedClasses
-            analyzer = SignAnalyzer(model, loadedClasses) { result -> prediction = result }
+            analyzer = SignAnalyzer(model, loadedClasses) { result ->
+                prediction = result
+                recorder.onPrediction(result)
+            }
             status = "Готово · ${loadedClasses.size} слов"
             Log.d(TAG, "model loaded, classes=${loadedClasses.size}")
         } catch (t: Throwable) {
