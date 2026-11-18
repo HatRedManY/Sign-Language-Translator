@@ -13,3 +13,22 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# build outputs
+**/build/
+.kotlin/
+*.apk
+*.aab
+
+# IDE
+.idea/
+
+# model binaries: GitHub не принимает файлы > 100 МБ
+# файл лежит локально в app/src/main/assets/
+*.ptl
+*.pt
+*.pth
+
+# archives
+*.7z
+*.zip

@@ -13,10 +13,21 @@ android {
         applicationId = "com.example.signlanguagetranslator"
         minSdk = 25
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // Отдельные APK под ABI, чтобы не заставлять телефон качать все библиотеки.
+    // Universal APK тоже собирается — он нужен для эмулятора и старых устройств.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = true
+        }
     }
 
     buildTypes {
@@ -38,15 +49,12 @@ android {
 
 dependencies {
     // ExecuTorch
-//    implementation(libs.executorch.android)
+    //implementation(libs.executorch.android)
 
     // PyTorch
-//    implementation(libs.soloader)
-//    implementation(libs.pytorch.android.lite)
-//    implementation(libs.pytorch.android.torchvision.lite)
-
-    //ONNX Runtime
-    implementation(libs.onnxruntime.android)
+    implementation(libs.soloader)
+    implementation(libs.pytorch.android.lite)
+    implementation(libs.pytorch.android.torchvision.lite)
 
     // CameraX
     implementation(libs.androidx.camera.core)
