@@ -1,0 +1,5 @@
+# Крупные бинарники (модели) в git не хранятся — см. .gitignore.
+# Если понадобится добавить их принудительно, используется Git LFS.
+*.pt filter=lfs diff=lfs merge=lfs -text
+*.pth filter=lfs diff=lfs merge=lfs -text
+*.ptl filter=lfs diff=lfs merge=lfs -text

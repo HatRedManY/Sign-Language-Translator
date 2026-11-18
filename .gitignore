@@ -1,0 +1,34 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# build outputs
+**/build/
+.kotlin/
+*.apk
+*.aab
+
+# IDE
+.idea/
+
+# model binaries: GitHub не принимает файлы > 100 МБ
+# файл лежит локально в app/src/main/assets/
+*.ptl
+*.pt
+*.pth
+
+# archives
+*.7z
+*.zip
