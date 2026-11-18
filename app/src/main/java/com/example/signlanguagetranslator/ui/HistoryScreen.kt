@@ -44,6 +44,7 @@ import kotlin.math.roundToInt
 fun HistoryScreen(
     sessions: List<HistorySession>,
     onBack: () -> Unit,
+    onNewSession: () -> Unit,
     onClear: () -> Unit
 ) {
     var confirmClear by remember { mutableStateOf(false) }
@@ -64,6 +65,9 @@ fun HistoryScreen(
             ) {
                 TextButton(onClick = onBack) {
                     Text("← Назад")
+                }
+                TextButton(onClick = onNewSession) {
+                    Text("Новая сессия")
                 }
                 Spacer(Modifier.weight(1f))
                 TextButton(

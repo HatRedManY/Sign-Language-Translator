@@ -315,6 +315,11 @@ fun CameraScreen() {
                 HistoryScreen(
                     sessions = sessions,
                     onBack = { screen = Screen.Camera },
+                    onNewSession = {
+                        recorder.startNewSession {
+                            historyVersion++
+                        }
+                    },
                     onClear = {
                         scope.launch {
                             withContext(Dispatchers.IO) { historyRepository.clearAll() }
