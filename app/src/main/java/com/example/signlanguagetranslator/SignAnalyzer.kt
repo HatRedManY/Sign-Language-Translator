@@ -192,13 +192,15 @@ class SignAnalyzer(
             }
 
             val source = image.toBitmap()
-            val upright = rotate(source, rotation)
-            val prepared = prepareFrame(upright, INPUT_SIZE)
+            // Сначала уменьшаем и вырезаем центр, и только потом поворачиваем:
+            // поворот кропа 112×112 в разы дешевле поворота кадра 720×1280.
+            val cropped = prepareFrame(source, INPUT_SIZE)
+            val prepared = rotate(cropped, rotation)
             val pixels = IntArray(INPUT_SIZE * INPUT_SIZE)
             prepared.getPixels(pixels, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
 
-            if (prepared !== upright) prepared.recycle()
-            if (upright !== source) upright.recycle()
+            if (prepared !== cropped) prepared.recycle()
+            if (cropped !== source) cropped.recycle()
             source.recycle()
 
             synchronized(lock) {
