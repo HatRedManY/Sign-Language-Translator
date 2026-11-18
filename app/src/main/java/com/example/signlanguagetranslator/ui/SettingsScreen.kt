@@ -1,5 +1,6 @@
 package com.example.signlanguagetranslator.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,6 +16,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -25,15 +27,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.signlanguagetranslator.data.SettingsStore
+import com.example.signlanguagetranslator.logic.RecognitionMode
 import kotlin.math.roundToInt
 
 /**
- * Настройки приложения. Пока здесь только порог автосохранения.
+ * Настройки приложения: порог автосохранения и скорость распознавания.
  */
 @Composable
 fun SettingsScreen(
     threshold: Float,
     onThresholdChange: (Float) -> Unit,
+    mode: RecognitionMode,
+    onModeChange: (RecognitionMode) -> Unit,
     onBack: () -> Unit
 ) {
     val percent = (threshold * 100).roundToInt()
@@ -145,6 +150,54 @@ fun SettingsScreen(
                                 Text("Сбросить на $defaultPercent%")
                             }
                         }
+                    }
+                }
+
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "Скорость распознавания",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+
+                        RecognitionMode.entries.forEach { item ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onModeChange(item) }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = item == mode,
+                                    onClick = { onModeChange(item) }
+                                )
+                                Column {
+                                    Text(
+                                        text = item.title,
+                                        style = MaterialTheme.typography.bodyLarge
+                                    )
+                                    Text(
+                                        text = item.description,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+
+                        Text(
+                            text = "Профиль меняется сразу, перезапускать приложение не нужно.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                 }
 

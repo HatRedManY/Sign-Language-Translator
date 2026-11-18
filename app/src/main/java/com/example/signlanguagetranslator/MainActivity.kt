@@ -41,6 +41,7 @@ import com.example.signlanguagetranslator.data.HistoryRepository
 import com.example.signlanguagetranslator.data.HistorySession
 import com.example.signlanguagetranslator.data.SettingsStore
 import com.example.signlanguagetranslator.logic.HistoryRecorder
+import com.example.signlanguagetranslator.logic.RecognitionMode
 import com.example.signlanguagetranslator.ui.HistoryScreen
 import com.example.signlanguagetranslator.ui.SettingsScreen
 import kotlinx.coroutines.Dispatchers
@@ -134,6 +135,7 @@ fun CameraScreen() {
     val historyRepository = remember { HistoryRepository(context) }
     val settings = remember { SettingsStore(context) }
     var saveThreshold by remember { mutableStateOf(settings.saveThreshold) }
+    var recognitionMode by remember { mutableStateOf(settings.recognitionMode) }
     val recorder = remember {
         HistoryRecorder(historyRepository, settings, scope) { word, confidence ->
             Log.d(TAG, "Автосохранение: $word ${(confidence * 100).roundToInt()}%")
@@ -156,13 +158,17 @@ fun CameraScreen() {
         analyzer?.setPaused(screen != Screen.Camera)
     }
 
+    LaunchedEffect(recognitionMode, analyzer) {
+        analyzer?.mode = recognitionMode
+    }
+
     LaunchedEffect(Unit) {
         try {
             val model = loadModel(context)
             val loadedClasses = withContext(Dispatchers.IO) { loadClasses(context) }
             require(loadedClasses.isNotEmpty()) { "classes.txt пуст или не найден" }
             classes = loadedClasses
-            analyzer = SignAnalyzer(model, loadedClasses) { result ->
+            analyzer = SignAnalyzer(model, loadedClasses, initialMode = recognitionMode) { result ->
                 prediction = result
                 recorder.onPrediction(result)
             }
@@ -345,6 +351,11 @@ fun CameraScreen() {
                     onThresholdChange = { value ->
                         saveThreshold = value
                         settings.saveThreshold = value
+                    },
+                    mode = recognitionMode,
+                    onModeChange = { value ->
+                        recognitionMode = value
+                        settings.recognitionMode = value
                     },
                     onBack = { screen = Screen.Camera }
                 )
