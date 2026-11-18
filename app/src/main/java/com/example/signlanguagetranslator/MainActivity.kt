@@ -30,6 +30,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size as ComposeSize
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -37,8 +38,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.signlanguagetranslator.data.HistoryRepository
+import com.example.signlanguagetranslator.data.HistorySession
 import com.example.signlanguagetranslator.data.SettingsStore
 import com.example.signlanguagetranslator.logic.HistoryRecorder
+import com.example.signlanguagetranslator.ui.HistoryScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
@@ -57,6 +60,9 @@ import kotlin.math.roundToInt
 private const val MODEL_ASSET = "r3d18_slovo_100.ptl"
 private const val CLASSES_ASSET = "classes.txt"
 private const val TAG = "SignLanguage"
+
+/** Какой экран поверх камеры сейчас открыт. */
+private enum class Screen { Camera, History, Settings }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -118,6 +124,9 @@ fun CameraScreen() {
     var showWords by remember { mutableStateOf(false) }
     var useFrontCamera by remember { mutableStateOf(false) }
     var errorText by remember { mutableStateOf<String?>(null) }
+    var screen by remember { mutableStateOf(Screen.Camera) }
+    var sessions by remember { mutableStateOf<List<HistorySession>>(emptyList()) }
+    var historyVersion by remember { mutableStateOf(0) }
 
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -132,6 +141,12 @@ fun CameraScreen() {
                     duration = SnackbarDuration.Short
                 )
             }
+        }
+    }
+
+    LaunchedEffect(screen, historyVersion) {
+        if (screen == Screen.History) {
+            sessions = withContext(Dispatchers.IO) { historyRepository.getSessions() }
         }
     }
 
@@ -235,8 +250,13 @@ fun CameraScreen() {
                 .padding(12.dp),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            FilledTonalButton(onClick = { showWords = true }) {
-                Text("Слова")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(onClick = { screen = Screen.History }) {
+                    Text("История")
+                }
+                FilledTonalButton(onClick = { showWords = true }) {
+                    Text("Слова")
+                }
             }
             FilledTonalButton(onClick = { useFrontCamera = !useFrontCamera }) {
                 Text(if (useFrontCamera) "Передняя" else "Задняя")
@@ -289,6 +309,34 @@ fun CameraScreen() {
 
         if (showWords) {
             WordsDialog(classes) { showWords = false }
+        }
+
+        if (screen == Screen.History) {
+            // Перехватываем касания, чтобы они не доходили до кнопок камеры под экраном.
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                awaitPointerEvent()
+                            }
+                        }
+                    }
+            ) {
+                HistoryScreen(
+                    sessions = sessions,
+                    onBack = { screen = Screen.Camera },
+                    onClear = {
+                        scope.launch {
+                            withContext(Dispatchers.IO) { historyRepository.clearAll() }
+                            recorder.forgetSession()
+                            sessions = emptyList()
+                            historyVersion++
+                        }
+                    }
+                )
+            }
         }
     }
 }

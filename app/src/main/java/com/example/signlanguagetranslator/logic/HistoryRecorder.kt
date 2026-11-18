@@ -66,6 +66,13 @@ class HistoryRecorder(
         policy.reset()
     }
 
+    /** Забывает текущую сессию, например после полной очистки истории. */
+    fun forgetSession() {
+        sessionId = null
+        lastActivityAt = 0L
+        policy.reset()
+    }
+
     private fun ensureSession(now: Long): Long {
         val current = sessionId
         if (current != null && now - lastActivityAt <= SESSION_GAP_MS) return current
