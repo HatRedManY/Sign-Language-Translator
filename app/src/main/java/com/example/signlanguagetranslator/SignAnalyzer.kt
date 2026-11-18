@@ -93,9 +93,36 @@ class SignAnalyzer(
     private var lastLoggedWidth = -1
     private var analyzeCount = 0
 
+    /** Когда открыт экран истории или настроек, кадры можно не обрабатывать. */
+    @Volatile private var paused = false
+    @Volatile private var clearBufferRequested = false
+
     private data class Frame(val timestampMs: Long, val pixels: IntArray)
 
+    /**
+     * Ставит обработку кадров на паузу.
+     * При возврате с паузы накопленные кадры сбрасываются, чтобы модель
+     * не «увидела» жест, показанный до открытия меню.
+     */
+    fun setPaused(value: Boolean) {
+        if (paused == value) return
+        paused = value
+        if (!value) clearBufferRequested = true
+    }
+
     override fun analyze(image: ImageProxy) {
+        if (paused) {
+            image.close()
+            return
+        }
+
+        if (clearBufferRequested) {
+            clearBufferRequested = false
+            buffer.clear()
+            lastInferenceMs = 0L
+            synchronized(lock) { ema = null }
+        }
+
         if (analyzeCount < 5) {
             analyzeCount++
             Log.d(

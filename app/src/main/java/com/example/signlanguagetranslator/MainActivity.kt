@@ -152,6 +152,10 @@ fun CameraScreen() {
         }
     }
 
+    LaunchedEffect(screen, analyzer) {
+        analyzer?.setPaused(screen != Screen.Camera)
+    }
+
     LaunchedEffect(Unit) {
         try {
             val model = loadModel(context)
