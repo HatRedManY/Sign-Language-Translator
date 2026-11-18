@@ -248,19 +248,18 @@ fun CameraScreen() {
 
         GuideOverlay()
 
-        Row(
+        FlowRow(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
                 .statusBarsPadding()
                 .padding(horizontal = 8.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             CompactButton("История") { screen = Screen.History }
             CompactButton("Слова") { showWords = true }
             CompactButton("Настройки") { screen = Screen.Settings }
-            Spacer(Modifier.weight(1f))
             CompactButton(if (useFrontCamera) "Передняя" else "Задняя") {
                 useFrontCamera = !useFrontCamera
             }
