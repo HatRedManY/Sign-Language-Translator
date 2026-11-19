@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+data/
+data_smoke/
+checkpoints/
+sentence/
+smoke/
