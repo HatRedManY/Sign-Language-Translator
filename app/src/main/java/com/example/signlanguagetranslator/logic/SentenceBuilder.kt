@@ -43,6 +43,7 @@ class SentenceBuilder(private val context: Context) {
         private const val PAD = 0L
         private const val BOS = 1L
         private const val EOS = 2L
+        private const val UNK = 3L
 
         // Модель обучена на последовательностях до 4 слов.
         private const val MAX_INPUT_WORDS = 4
@@ -104,7 +105,7 @@ class SentenceBuilder(private val context: Context) {
                 for (i in 1 until ids.size) {
                     val id = ids[i].toInt()
                     if (id == EOS.toInt()) break
-                    if (id == PAD.toInt() || id == BOS.toInt()) continue
+                    if (id == PAD.toInt() || id == BOS.toInt() || id == UNK.toInt()) continue
                     if (id in idToWord.indices) {
                         resultTokens.add(idToWord[id])
                     }
