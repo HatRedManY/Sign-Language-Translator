@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -25,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,22 +34,37 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.signlanguagetranslator.data.HistorySession
 import com.example.signlanguagetranslator.data.HistoryWord
+import com.example.signlanguagetranslator.logic.SentenceResult
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
+private data class SentenceDialogData(
+    val title: String,
+    val text: String
+)
+
 /**
  * Экран истории: сессии и сохранённые в них слова.
+ *
+ * [onBuildSentence] получает слова сессии и возвращает готовое предложение
+ * или сообщение об ошибке. Работа с моделью выполняется в SentenceBuilder
+ * на Dispatchers.IO, поэтому здесь достаточно обычного coroutine scope.
  */
 @Composable
 fun HistoryScreen(
     sessions: List<HistorySession>,
     onBack: () -> Unit,
     onNewSession: () -> Unit,
-    onClear: () -> Unit
+    onClear: () -> Unit,
+    onBuildSentence: suspend (List<String>) -> SentenceResult
 ) {
     var confirmClear by remember { mutableStateOf(false) }
+    var buildingSessionId by remember { mutableStateOf<Long?>(null) }
+    var sentenceDialog by remember { mutableStateOf<SentenceDialogData?>(null) }
+    val scope = rememberCoroutineScope()
     val visibleSessions = remember(sessions) { sessions.filter { it.words.isNotEmpty() } }
 
     Surface(modifier = Modifier.fillMaxSize()) {
@@ -121,7 +138,36 @@ fun HistoryScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     items(visibleSessions, key = { it.id }) { session ->
-                        SessionCard(session)
+                        SessionCard(
+                            session = session,
+                            isBuilding = buildingSessionId == session.id,
+                            onBuild = {
+                                if (buildingSessionId == null) {
+                                    buildingSessionId = session.id
+                                    scope.launch {
+                                        val result = try {
+                                            onBuildSentence(session.words.map { it.word })
+                                        } catch (t: Throwable) {
+                                            SentenceResult.Failure(
+                                                "Не удалось собрать предложение: " +
+                                                    (t.message ?: t.toString())
+                                            )
+                                        }
+                                        buildingSessionId = null
+                                        sentenceDialog = when (result) {
+                                            is SentenceResult.Success -> SentenceDialogData(
+                                                title = "Предложение",
+                                                text = result.text
+                                            )
+                                            is SentenceResult.Failure -> SentenceDialogData(
+                                                title = "Не получилось",
+                                                text = result.message
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        )
                     }
                 }
             }
@@ -150,10 +196,32 @@ fun HistoryScreen(
             }
         )
     }
+
+    sentenceDialog?.let { dialog ->
+        AlertDialog(
+            onDismissRequest = { sentenceDialog = null },
+            title = { Text(dialog.title) },
+            text = {
+                Text(
+                    text = dialog.text,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { sentenceDialog = null }) {
+                    Text("Закрыть")
+                }
+            }
+        )
+    }
 }
 
 @Composable
-private fun SessionCard(session: HistorySession) {
+private fun SessionCard(
+    session: HistorySession,
+    isBuilding: Boolean,
+    onBuild: () -> Unit
+) {
     val averageConfidence = remember(session) {
         session.words.map { it.confidence }.average().toFloat()
     }
@@ -198,6 +266,14 @@ private fun SessionCard(session: HistorySession) {
                 session.words.forEach { word ->
                     WordChip(word)
                 }
+            }
+
+            FilledTonalButton(
+                onClick = onBuild,
+                enabled = !isBuilding,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (isBuilding) "Собираю…" else "Собрать предложение")
             }
         }
     }

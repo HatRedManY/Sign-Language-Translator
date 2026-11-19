@@ -42,6 +42,7 @@ import com.example.signlanguagetranslator.data.HistorySession
 import com.example.signlanguagetranslator.data.SettingsStore
 import com.example.signlanguagetranslator.logic.HistoryRecorder
 import com.example.signlanguagetranslator.logic.RecognitionMode
+import com.example.signlanguagetranslator.logic.SentenceBuilder
 import com.example.signlanguagetranslator.ui.HistoryScreen
 import com.example.signlanguagetranslator.ui.SettingsScreen
 import kotlinx.coroutines.Dispatchers
@@ -134,6 +135,7 @@ fun CameraScreen() {
     val snackbarHostState = remember { SnackbarHostState() }
     val historyRepository = remember { HistoryRepository(context) }
     val settings = remember { SettingsStore(context) }
+    val sentenceBuilder = remember { SentenceBuilder(context) }
     var saveThreshold by remember { mutableStateOf(settings.saveThreshold) }
     var recognitionMode by remember { mutableStateOf(settings.recognitionMode) }
     val recorder = remember {
@@ -339,7 +341,8 @@ fun CameraScreen() {
                             sessions = emptyList()
                             historyVersion++
                         }
-                    }
+                    },
+                    onBuildSentence = { words -> sentenceBuilder.build(words) }
                 )
             }
         }
