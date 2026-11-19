@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 data/
+data_small/
 data_smoke/
 checkpoints/
 sentence/

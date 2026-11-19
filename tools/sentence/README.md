@@ -351,12 +351,21 @@ $env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
 .\gradlew.bat :app:assembleDebug --no-daemon
 ```
 
-APK: `app\build\outputs\apk\debug\app-debug.apk`.
+В проекте включены ABI-сплиты, поэтому одного `app-debug.apk` нет. Собираются:
+
+```text
+app\build\outputs\apk\debug\app-arm64-v8a-debug.apk     — для большинства современных телефонов
+app\build\outputs\apk\debug\app-armeabi-v7a-debug.apk   — для старых 32-битных ARM-устройств
+app\build\outputs\apk\debug\app-x86_64-debug.apk        — для эмулятора x86_64
+app\build\outputs\apk\debug\app-universal-debug.apk     — универсальный, самый большой
+```
+
+Для обычного телефона берите `app-arm64-v8a-debug.apk`.
 
 Установка:
 
 ```powershell
-adb install -r app\build\outputs\apk\debug\app-debug.apk
+adb install -r app\build\outputs\apk\debug\app-arm64-v8a-debug.apk
 ```
 
 Или просто нажмите Run в Android Studio.
@@ -516,7 +525,10 @@ $env:ANDROID_HOME="C:\Users\Admin\AppData\Local\Android\Sdk"
 $env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
 
 .\gradlew.bat :app:assembleDebug --no-daemon
-adb install -r app\build\outputs\apk\debug\app-debug.apk
+adb install -r app\build\outputs\apk\debug\app-arm64-v8a-debug.apk
 ```
+
+Для эмулятора x86_64 используйте `app-x86_64-debug.apk`, для старого
+32-битного телефона — `app-armeabi-v7a-debug.apk`.
 
 Готово: откройте «История» → «Собрать предложение».
