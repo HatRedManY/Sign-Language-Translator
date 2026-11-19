@@ -14,7 +14,9 @@
 """
 
 import argparse
+import pickle
 import shutil
+import zipfile
 from pathlib import Path
 
 import torch
@@ -32,6 +34,33 @@ class Exported(nn.Module):
 
     def forward(self, src: torch.Tensor) -> torch.Tensor:
         return self.model.generate(src)
+
+
+def check_ptl_compat(path: Path) -> None:
+    """Печатает версии формата и проверяет совместимость с Mobile 2.1.0.
+
+    PyTorch Mobile 2.1.0 поддерживает bytecode 4..9 и file format <= 10.
+    Экспорт из более новых версий PyTorch обычно даёт те же 8/10, но
+    проверить полезно: при несовместимости Android не загрузит sent.ptl.
+    """
+    with zipfile.ZipFile(path) as archive:
+        root = path.stem
+        bytecode = pickle.loads(archive.read(f"{root}/bytecode.pkl"))[0]
+        file_version = int(
+            archive.read(f"{root}/.data/version").decode("ascii").strip()
+        )
+
+    print(f"Формат .ptl: bytecode={bytecode}, file={file_version}")
+    if not (4 <= bytecode <= 9):
+        print(
+            "ВНИМАНИЕ: bytecode вне диапазона 4..9 — "
+            "PyTorch Mobile 2.1.0 может не загрузить модель."
+        )
+    if file_version > 10:
+        print(
+            "ВНИМАНИЕ: file format больше 10 — "
+            "PyTorch Mobile 2.1.0 может не загрузить модель."
+        )
 
 
 def detokenize(tokens) -> str:
@@ -126,6 +155,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     ptl_path = out_dir / "sent.ptl"
     scripted._save_for_lite_interpreter(str(ptl_path))
+    check_ptl_compat(ptl_path)
     shutil.copyfile(vocab_path, out_dir / "vocab.txt")
 
     print(f"Проверено примеров: {len(rows)}, расхождений eager/scripted: {mismatches}")

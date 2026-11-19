@@ -11,7 +11,7 @@ from pathlib import Path
 
 import torch
 
-from export_ptl import Exported
+from export_ptl import Exported, check_ptl_compat
 from train_seq2seq import Seq2Seq
 
 
@@ -53,6 +53,7 @@ def main() -> None:
     path = out_dir / "sent.ptl"
     scripted._save_for_lite_interpreter(str(path))
     assert path.exists() and path.stat().st_size > 0
+    check_ptl_compat(path)
 
     print(f"SMOKE OK: logits={tuple(logits.shape)}, out={tuple(script.shape)}, "
           f"ptl={path.stat().st_size/1024:.0f} КБ")

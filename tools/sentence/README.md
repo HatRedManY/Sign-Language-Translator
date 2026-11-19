@@ -301,6 +301,7 @@ python train_seq2seq.py --data data --out checkpoints `
 Ожидаемый вывод:
 
 ```text
+Формат .ptl: bytecode=8, file=10
 Проверено примеров: 200, расхождений eager/scripted: 0
 Модель: ...\sentence\sent.ptl  (примерно 21 МБ)
 Словарь: ...\sentence\vocab.txt
@@ -308,6 +309,12 @@ python train_seq2seq.py --data data --out checkpoints `
 
 `Lite Interpreter is deprecated` — предупреждение, а не ошибка. Файл `.ptl`
 создаётся и подходит для PyTorch Mobile Lite, который использует приложение.
+
+PyTorch Mobile 2.1.0 поддерживает bytecode 4–9 и file format не больше 10.
+Экспорт из PyTorch 2.11 обычно даёт `bytecode=8, file=10` — это совместимо.
+Если скрипт печатает `ВНИМАНИЕ`, экспортируйте в отдельном окружении с
+`torch==2.1.0` (Python 3.11): чекпоинт загружается и в более старом PyTorch,
+потому что в нём только обычные тензоры и конфиг.
 
 ---
 
