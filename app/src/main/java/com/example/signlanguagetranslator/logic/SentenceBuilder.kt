@@ -142,20 +142,14 @@ class SentenceBuilder(private val context: Context) {
                 error("vocab.txt пуст или повреждён")
             }
 
+            // Всегда обновляем кэш из assets. Так после пересборки APK с новым
+            // sent.ptl приложение подхватит его без очистки данных (а значит,
+            // без потери истории). Копия нужна, потому что LiteModuleLoader
+            // умеет читать только обычный файл, а не assets.
             val modelFile = File(context.filesDir, CACHED_MODEL)
-            if (!modelFile.exists()) {
-                val tempFile = File(context.filesDir, "$CACHED_MODEL.tmp")
-                tempFile.delete()
-                context.assets.open(MODEL_ASSET).use { input ->
-                    FileOutputStream(tempFile).use { output ->
-                        input.copyTo(output, bufferSize = 1 shl 20)
-                    }
-                }
-                if (!tempFile.renameTo(modelFile)) {
-                    modelFile.delete()
-                    if (!tempFile.renameTo(modelFile)) {
-                        error("Не удалось сохранить sent.ptl в ${modelFile.absolutePath}")
-                    }
+            context.assets.open(MODEL_ASSET).use { input ->
+                FileOutputStream(modelFile).use { output ->
+                    input.copyTo(output, bufferSize = 1 shl 20)
                 }
             }
 
