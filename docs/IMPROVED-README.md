@@ -208,6 +208,10 @@
 Проверка на подключённом устройстве или эмуляторе:
 
 ```powershell
+# если PowerShell не видит JDK/SDK:
+# $env:JAVA_HOME = "E:\Programs\Android\jbr"
+# $env:ANDROID_HOME = "C:\Users\Admin\AppData\Local\Android\Sdk"
+
 .\gradlew.bat :app:assembleDebugAndroidTest
 adb install -r app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk
 adb shell am instrument -w -e class com.example.signlanguagetranslator.SentenceBuilderTest `
@@ -347,8 +351,8 @@ C:\Users\Admin\AppData\Local\Android\Sdk\platform-tools\adb.exe install -r `
 - Приложение: `E:\Programs\prilojuxa\Sign-Language-Translator-restored`.
 - Ветка: `message-db`.
 - История работ: `c399e79` — восстановленная версия, `c399e79..be0ce6e` —
-  история слов, `19da95f..14b7278` — скорость, `af063a1..3a2f3fa` — сборка
-  предложений и документация.
+  история слов, `19da95f..14b7278` — скорость, `af063a1..2f60190` — сборка
+  предложений, тест и документация.
 
 ---
 
