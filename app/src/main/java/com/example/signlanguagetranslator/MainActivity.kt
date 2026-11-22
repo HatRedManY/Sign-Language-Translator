@@ -164,6 +164,11 @@ fun CameraScreen() {
         analyzer?.mode = recognitionMode
     }
 
+    // Порог распознавания следует за порогом сохранения из настроек.
+    LaunchedEffect(saveThreshold, analyzer) {
+        analyzer?.minConfidence = saveThreshold
+    }
+
     LaunchedEffect(Unit) {
         try {
             val model = loadModel(context)

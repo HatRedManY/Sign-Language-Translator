@@ -68,6 +68,8 @@ class SignAnalyzer(
 
         // 0.35 — компромисс: на тесте Slovo это ~74% покрытия при ~84% точности
         // среди принятых предсказаний. 0.40 даёт ~69% покрытия и ~86% точности.
+        // Значение по умолчанию; в runtime используется [SignAnalyzer.minConfidence],
+        // который MainActivity выставляет равным порогу сохранения из настроек.
         private const val MIN_CONFIDENCE = 0.35f
 
         private val MEAN = floatArrayOf(0.43216f, 0.394666f, 0.37645f)
@@ -87,6 +89,14 @@ class SignAnalyzer(
      */
     @Volatile
     var mode: RecognitionMode = initialMode
+
+    /**
+     * Порог уверенности, при котором предсказание считается принятым
+     * (показывается как распознанное и участвует в автосохранении).
+     * MainActivity выставляет его равным `settings.saveThreshold`.
+     */
+    @Volatile
+    var minConfidence: Float = MIN_CONFIDENCE
 
     private val buffer = ArrayDeque<Frame>(MAX_BUFFER_FRAMES)
 
@@ -273,7 +283,7 @@ class SignAnalyzer(
                 val top = topK(smoothed, 3)
                 val bestWord = top.firstOrNull()?.first ?: "?"
                 val bestConfidence = top.firstOrNull()?.second ?: 0f
-                val accepted = bestConfidence >= MIN_CONFIDENCE
+                val accepted = bestConfidence >= minConfidence
 
                 Log.d(
                     TAG,
